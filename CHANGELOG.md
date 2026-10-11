@@ -11,6 +11,12 @@
 ### Changed
 - README описывает продукт; Ponytail, дисциплина и второе мнение вынесены в `docs/WORKFLOW_GUARDS.md`.
 
+### Fixed
+- `onec-ops`: необязательные аргументы `zabbix_api_tool.params`, `zabbix_perf_report_tool.hosts` и
+  `event_log_parse_tool.events` (по умолчанию `None`) объявлены как `dict`/`list` без `None` — схема MCP
+  обещала `"default": null`, но явный `null` от клиента падал на валидации до вызова инструмента. Теперь
+  тип `"dict | None"`/`"list | None"`.
+
 ## [2.4.1] - 2026-10-20
 
 ### Fixed
