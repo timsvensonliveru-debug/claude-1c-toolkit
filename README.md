@@ -2,11 +2,9 @@
 
 [![CI](https://github.com/vgtitov/bsl-ai-toolkit/actions/workflows/tests.yml/badge.svg)](https://github.com/vgtitov/bsl-ai-toolkit/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-00B9BF.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![AGENTS.md](https://img.shields.io/badge/AGENTS.md-ready-blue.svg)](AGENTS.md)
-[![1С:Предприятие 8.3](https://img.shields.io/badge/1С:Предприятие-8.3-red.svg)](https://v8.1c.ru/)
-[![MCP](https://img.shields.io/badge/MCP-servers-5b21b6.svg)](https://modelcontextprotocol.io/)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org/)
+
+*AI agent toolkit for 1C:Enterprise 8.3 (BSL) development. MIT. Documentation is in Russian.*
 
 Набор **правил, скиллов и MCP-серверов** для разработки на **1С:Предприятие 8.3 (BSL)** с ИИ-агентом. Агент ищет по
 коду вашей конфигурации и расширений, получает диагностики BSL Language Server после каждой правки и меняет метаданные
