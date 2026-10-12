@@ -5,15 +5,14 @@
   .\onboard.ps1
   .\onboard.ps1 -SrcDir C:\1c-src
 .EXAMPLE
-  .\onboard.ps1 -WithPonytail -PonytailMode full
-  НЕОБЯЗАТЕЛЬНО: плагин Ponytail + правило «сначала проверь, что уже есть» в AGENTS.md рабочего каталога.
-  Без -WithPonytail не ставится, поведение прежнее.
+  .\onboard.ps1 -PonytailMode full     # режим Ponytail явно; без него — по ONEC_ACTIVE_PROFILE: analyst → off, иначе lite
+  .\onboard.ps1 -NoPonytail            # без плагина Ponytail (правило в AGENTS.md остаётся)
 #>
 param(
   [string]$WorkDir = (Get-Location).Path,
   [string]$SrcDir  = $(if ($env:ONEC_SRC_DIR) { $env:ONEC_SRC_DIR } else { "$env:USERPROFILE\erp-src" }),
-  [switch]$WithPonytail,
-  [ValidateSet('off','lite','full','ultra')][string]$PonytailMode = 'lite'
+  [switch]$NoPonytail,
+  [ValidateSet('off','lite','full','ultra')][string]$PonytailMode
 )
 $ErrorActionPreference = 'Stop'
 function Say($m){ Write-Host "`n== $m ==" -ForegroundColor Cyan }
@@ -102,12 +101,13 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
   catch { Warn "install_git_hooks пропущен — поставь вручную: uv run scripts\install_git_hooks.py" }
 } else { Warn "uv не найден — поставь хук вручную: python scripts\install_git_hooks.py" }
 
-if ($WithPonytail) {
-  Say "Необязательно: Ponytail (режим $PonytailMode) + правило «сначала проверь, что уже есть»"
+if (-not $NoPonytail) {
+  Say "Ponytail (режим $(if ($PonytailMode) { $PonytailMode } else { 'по профилю' }); только код, документы не сокращает; отключить: -NoPonytail)"
   $pt = Join-Path $TeamDir 'scripts\ponytail_setup.py'
   try {
-    if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $pt --mode $PonytailMode --project $WorkDir }
-    else { python $pt --mode $PonytailMode --project $WorkDir }
+    $ptArgs = @('--project', $WorkDir) + $(if ($PonytailMode) { @('--mode', $PonytailMode) } else { @() })
+    if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $pt @ptArgs }
+    else { python $pt @ptArgs }
   } catch { Warn "ponytail_setup с ошибкой (не критично)" }
 }
 

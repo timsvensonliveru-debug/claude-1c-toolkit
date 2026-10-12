@@ -36,4 +36,10 @@ if (Test-Path $envFile) {
   Write-Host "  [!] .env не найден — скопируй .env.example в .env и заполни" -ForegroundColor Yellow
 }
 
+Write-Host "[+] Ponytail (только код; кто выключил руками — не включается; отключить: AI_TOOLKIT_NO_PONYTAIL=1)"
+if (-not $env:AI_TOOLKIT_NO_PONYTAIL) {
+  $pt = Join-Path $RepoRoot 'scripts\ponytail_setup.py'
+  try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $pt } else { python $pt } } catch { }
+}
+
 Write-Host "Готово. Перезапусти Claude Code, чтобы подхватились обновлённые скиллы."

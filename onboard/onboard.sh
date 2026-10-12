@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Bootstrap окружения Claude Code для разработки 1С. Идемпотентный. Org-agnostic. macOS/Linux.
 # Запуск:  bash onboard/onboard.sh   [--srcdir <путь>]
-#          bash onboard/onboard.sh --with-ponytail [--ponytail-mode full]
-#            НЕОБЯЗАТЕЛЬНО: плагин Ponytail + правило «сначала проверь, что уже есть» в AGENTS.md
-#            рабочего каталога. Без флага не ставится, поведение прежнее.
+#          bash onboard/onboard.sh --ponytail-mode full   # режим Ponytail явно; без флага — по ONEC_ACTIVE_PROFILE:
+#                                                         # analyst → off, остальные и без профиля → lite
+#          bash onboard/onboard.sh --no-ponytail          # без плагина Ponytail (правило в AGENTS.md остаётся)
 set -euo pipefail
-WORKDIR="$(pwd)"; SRC_DIR="${ONEC_SRC_DIR:-$HOME/erp-src}"; WITH_PONYTAIL=0; PONYTAIL_MODE=lite
+WORKDIR="$(pwd)"; SRC_DIR="${ONEC_SRC_DIR:-$HOME/erp-src}"; WITH_PONYTAIL=1; PONYTAIL_MODE=""
 while [ $# -gt 0 ]; do case "$1" in
   --srcdir) SRC_DIR="$2"; shift 2;;
   --workdir) WORKDIR="$2"; shift 2;;
-  --with-ponytail) WITH_PONYTAIL=1; shift;;
+  --no-ponytail) WITH_PONYTAIL=0; shift;;
   --ponytail-mode) PONYTAIL_MODE="${2:?--ponytail-mode: нужен off|lite|full|ultra}"; shift 2;;
   *) echo "неизвестный аргумент: $1"; exit 1;;
 esac; done
-case "$PONYTAIL_MODE" in off|lite|full|ultra) ;; *) echo "--ponytail-mode: нужен off|lite|full|ultra"; exit 1;; esac
+case "$PONYTAIL_MODE" in ""|off|lite|full|ultra) ;; *) echo "--ponytail-mode: нужен off|lite|full|ultra"; exit 1;; esac
 
 say(){ printf '\n== %s ==\n' "$1"; }
 ok(){ printf '  [ok] %s\n' "$1"; }
@@ -84,9 +84,9 @@ if command -v uv >/dev/null 2>&1; then
 else warn "uv не найден — поставь хук вручную: python scripts/install_git_hooks.py"; fi
 
 if [ "$WITH_PONYTAIL" = 1 ]; then
-  say "Необязательно: Ponytail (режим $PONYTAIL_MODE) + правило «сначала проверь, что уже есть»"
+  say "Ponytail (режим ${PONYTAIL_MODE:-по профилю ${ONEC_ACTIVE_PROFILE:-нет, lite}}; только код, документы не сокращает; отключить: --no-ponytail)"
   if command -v uv >/dev/null 2>&1; then PY="uv run"; else PY="python3"; fi
-  $PY "$TEAM_DIR/scripts/ponytail_setup.py" --mode "$PONYTAIL_MODE" --project "$WORKDIR" || warn "ponytail_setup с ошибкой (не критично)"
+  $PY "$TEAM_DIR/scripts/ponytail_setup.py" ${PONYTAIL_MODE:+--mode "$PONYTAIL_MODE"} --project "$WORKDIR" || warn "ponytail_setup с ошибкой (не критично)"
 fi
 
 say "Готово. Ручные шаги"
