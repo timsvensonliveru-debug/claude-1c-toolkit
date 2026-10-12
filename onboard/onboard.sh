@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Bootstrap окружения Claude Code для разработки 1С. Идемпотентный. Org-agnostic. macOS/Linux.
 # Запуск:  bash onboard/onboard.sh   [--srcdir <путь>]
+#          bash onboard/onboard.sh --with-ponytail [--ponytail-mode full]
+#            НЕОБЯЗАТЕЛЬНО: плагин Ponytail + правило «сначала проверь, что уже есть» в AGENTS.md
+#            рабочего каталога. Без флага не ставится, поведение прежнее.
 set -euo pipefail
-WORKDIR="$(pwd)"; SRC_DIR="${ONEC_SRC_DIR:-$HOME/erp-src}"
+WORKDIR="$(pwd)"; SRC_DIR="${ONEC_SRC_DIR:-$HOME/erp-src}"; WITH_PONYTAIL=0; PONYTAIL_MODE=lite
 while [ $# -gt 0 ]; do case "$1" in
   --srcdir) SRC_DIR="$2"; shift 2;;
   --workdir) WORKDIR="$2"; shift 2;;
+  --with-ponytail) WITH_PONYTAIL=1; shift;;
+  --ponytail-mode) PONYTAIL_MODE="$2"; shift 2;;
   *) echo "неизвестный аргумент: $1"; exit 1;;
 esac; done
 
@@ -76,6 +81,12 @@ say "8/8 Git: коммиты без соавторства Claude (commit-msg х
 if command -v uv >/dev/null 2>&1; then
   uv run "$TEAM_DIR/scripts/install_git_hooks.py" && ok "commit-msg хук поставлен" || warn "install_git_hooks пропущен — вручную: uv run scripts/install_git_hooks.py"
 else warn "uv не найден — поставь хук вручную: python scripts/install_git_hooks.py"; fi
+
+if [ "$WITH_PONYTAIL" = 1 ]; then
+  say "Необязательно: Ponytail (режим $PONYTAIL_MODE) + правило «сначала проверь, что уже есть»"
+  if command -v uv >/dev/null 2>&1; then PY="uv run"; else PY="python3"; fi
+  $PY "$TEAM_DIR/scripts/ponytail_setup.py" --mode "$PONYTAIL_MODE" --project "$WORKDIR" || warn "ponytail_setup с ошибкой (не критично)"
+fi
 
 say "Готово. Ручные шаги"
 cat <<EOF

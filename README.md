@@ -43,6 +43,41 @@ git clone https://github.com/vgtitov/bsl-ai-toolkit ; cd bsl-ai-toolkit
 > подключаются минимальной адаптацией из общего ядра (`core/`) — см. `adapters/`. Не 1С-Битрикс (это CMS на PHP —
 > [отдельный toolkit](https://github.com/vgtitov/bitrix-ai-toolkit)).
 
+## Необязательно: Ponytail и правило «сначала проверь, что уже есть»
+
+Выключено по умолчанию: обычная установка ничего из этого не ставит, у команды поведение агентов не меняется.
+
+- **[Ponytail](https://github.com/DietrichGebert/ponytail)** (MIT, автор Dietrich Gebert) — плагин для Claude Code и
+  Codex: перед написанием кода агент проходит лестницу «нужно ли это вообще → есть ли уже готовое → минимум кода».
+  Ставится на пользователя, то есть действует во всех его проектах, не только в этом.
+- **Правило «сначала проверь, что уже есть»** — та же лестница под 1С: типовая и БСП → общие модули проекта → механизмы платформы → одна строка → минимум
+  ([core/optional/check-existing-first.md](core/optional/check-existing-first.md)). Мягкая рекомендация, без
+  запретов; валидацию, права и защиту данных не упрощает. Дописывается блоком в `AGENTS.md` рабочего каталога (`--workdir`, по умолчанию текущий), который читают
+  Codex, Cursor, Copilot и Claude Code (через `@AGENTS.md` в `CLAUDE.md`). Для Gemini CLI подключи `AGENTS.md` в
+  `contextFileName` или скопируй блок в `GEMINI.md`.
+
+Включить:
+```bash
+bash onboard/onboard.sh --with-ponytail                      # lite
+bash onboard/onboard.sh --with-ponytail --ponytail-mode full
+```
+```powershell
+.\onboard\onboard.ps1 -WithPonytail -PonytailMode full
+```
+Режим: `lite` по умолчанию (для команд: агент делает, что просили, и одной строкой называет более простой путь),
+`full` — для одиночной работы (лестница обязательна). Режим пишется в `~/.config/ponytail/config.json`, только если
+его там ещё нет; сменить потом — `/ponytail default full` в агенте или переменная `PONYTAIL_DEFAULT_MODE`.
+Отдельно, без установщика: `python3 scripts/ponytail_setup.py --help` (`--no-plugin` — только правило).
+
+Повторный запуск безопасен: плагин ставится штатными `claude plugin` / `codex plugin`, чужие настройки не
+трогаются, выключенный руками Ponytail обратно не включается, блок правила заменяется, а не дублируется. Но
+onboard без флага перезаписывает `AGENTS.md` рабочего каталога из набора, и блок пропадает: повторяй с флагом. После
+установки в Codex один раз открой `/hooks` и разреши два хука Ponytail; для хуков нужен `node`.
+
+Выключить: `claude plugin disable ponytail@ponytail`; в Codex — `enabled = false` в `[plugins."ponytail@ponytail"]`
+файла `~/.codex/config.toml` (или `codex plugin remove ponytail@ponytail`); на время сессии — `stop ponytail`.
+Правило — удалить блок между метками `check-existing-first` в `AGENTS.md`.
+
 ## Идея
 Вся RU-сцена AI-разработки 1С («вайб-кодинг», агенты в EDT/Cursor) упирается в одно: **модель галлюцинирует детали 1С** —
 выдумывает методы, путает фасады (менеджер/объект/выборка), не знает состав типовой и режим совместимости; а формы/СКД/
