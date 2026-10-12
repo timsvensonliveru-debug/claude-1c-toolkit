@@ -10,7 +10,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --srcdir) SRC_DIR="$2"; shift 2;;
   --workdir) WORKDIR="$2"; shift 2;;
   --with-ponytail) WITH_PONYTAIL=1; shift;;
-  --ponytail-mode) PONYTAIL_MODE="$2"; shift 2;;
+  --ponytail-mode) PONYTAIL_MODE="${2:?--ponytail-mode: нужен off|lite|full|ultra}"; shift 2;;
   *) echo "неизвестный аргумент: $1"; exit 1;;
 esac; done
 
