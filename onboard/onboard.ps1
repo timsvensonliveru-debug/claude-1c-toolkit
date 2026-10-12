@@ -115,13 +115,11 @@ if (-not $NoPonytail) {
 }
 
 $dg = Join-Path $TeamDir 'scripts\discipline_gate.py'
-if ($NoDiscipline) { Say "Дисциплина выключена (-NoDiscipline)" } else {
-  Say "Дисциплина: не дать сказать «готово» без проверки (режим warn; AI_TOOLKIT_DISCIPLINE=off|warn|enforce; отключить: -NoDiscipline)"
+if (-not $NoDiscipline) {
+  Say "Дисциплина: не дать сказать «готово» без проверки (режим warn; AI_TOOLKIT_DISCIPLINE=off|warn|enforce; не ставить: -NoDiscipline; убрать: discipline_gate.py uninstall)"
+  try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $dg install } else { python $dg install } }
+  catch { Warn "discipline_gate с ошибкой (не критично)" }
 }
-try {
-  $dgArg = if ($NoDiscipline) { 'uninstall' } else { 'install' }
-  if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $dg $dgArg } else { python $dg $dgArg }
-} catch { Warn "discipline_gate с ошибкой (не критично)" }
 
 Say "Готово. Ручные шаги"
 @"

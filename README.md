@@ -87,8 +87,9 @@ Stop-хук `scripts/discipline_gate.py` не даёт закончить ход
 смоук, линтер), ход кончается обещанием без действия, «готово» в не-код задаче без файла и источников.
 Смотрит только текущий ход. Ставится установщиком и обновлением в `~/.claude/settings.json`, работает во всех
 проектах. Режим — `AI_TOOLKIT_DISCIPLINE`: `warn` по умолчанию (предупреждение), `enforce` (вернуть модель
-доделывать), `off`. Отказ: `--no-discipline` / `-NoDiscipline` при онбординге, `AI_TOOLKIT_NO_DISCIPLINE=1`
-при обновлении или `"env": {"AI_TOOLKIT_DISCIPLINE": "off"}` в своих настройках, его установщик не перебивает.
+доделывать), `off`. Не ставить: `--no-discipline` / `-NoDiscipline` при онбординге, `AI_TOOLKIT_NO_DISCIPLINE=1` при обновлении.
+Выключить насовсем: `"env": {"AI_TOOLKIT_DISCIPLINE": "off"}` в своих настройках, установщик его не перебивает.
+Убрать хук: `python scripts/discipline_gate.py uninstall`.
 `uninstall`/`remove` не годятся: следующее обновление поставит плагин снова. На время сессии — `stop ponytail`.
 
 ## Идея

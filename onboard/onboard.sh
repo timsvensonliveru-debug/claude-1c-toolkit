@@ -95,9 +95,9 @@ fi
 
 if command -v uv >/dev/null 2>&1; then PY=(uv run); else PY=(python3); fi
 if [ "$WITH_DISCIPLINE" = 1 ]; then
-  say "Дисциплина: не дать сказать «готово» без проверки (режим warn; AI_TOOLKIT_DISCIPLINE=off|warn|enforce; отключить: --no-discipline)"
+  say "Дисциплина: не дать сказать «готово» без проверки (режим warn; AI_TOOLKIT_DISCIPLINE=off|warn|enforce; не ставить: --no-discipline; убрать: discipline_gate.py uninstall)"
   "${PY[@]}" "$TEAM_DIR/scripts/discipline_gate.py" install || warn "discipline_gate с ошибкой (не критично)"
-else "${PY[@]}" "$TEAM_DIR/scripts/discipline_gate.py" uninstall || true; fi
+fi
 
 say "Готово. Ручные шаги"
 cat <<EOF
