@@ -13,6 +13,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --ponytail-mode) PONYTAIL_MODE="${2:?--ponytail-mode: нужен off|lite|full|ultra}"; shift 2;;
   *) echo "неизвестный аргумент: $1"; exit 1;;
 esac; done
+case "$PONYTAIL_MODE" in off|lite|full|ultra) ;; *) echo "--ponytail-mode: нужен off|lite|full|ultra"; exit 1;; esac
 
 say(){ printf '\n== %s ==\n' "$1"; }
 ok(){ printf '  [ok] %s\n' "$1"; }
