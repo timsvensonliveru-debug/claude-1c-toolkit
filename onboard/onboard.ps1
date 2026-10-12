@@ -19,6 +19,7 @@ function Say($m){ Write-Host "`n== $m ==" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "  [ok] $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "  [!] $m" -ForegroundColor Yellow }
 
+if ($NoPonytail -and $PonytailMode) { throw "-NoPonytail и -PonytailMode вместе не имеют смысла" }
 $TeamDir   = Split-Path -Parent $PSScriptRoot
 $SkillsDst = Join-Path $env:USERPROFILE '.claude\skills'
 

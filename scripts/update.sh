@@ -35,7 +35,7 @@ else
 fi
 
 echo "[+] Ponytail (только код; кто выключил руками — не включается; отключить: AI_TOOLKIT_NO_PONYTAIL=1)"
-if [ -z "${AI_TOOLKIT_NO_PONYTAIL:-}" ]; then
+if [ "${AI_TOOLKIT_NO_PONYTAIL:-}" != 1 ]; then
   if command -v uv >/dev/null 2>&1; then uv run "$REPO_ROOT/scripts/ponytail_setup.py" || true
   else python3 "$REPO_ROOT/scripts/ponytail_setup.py" || true; fi
 fi

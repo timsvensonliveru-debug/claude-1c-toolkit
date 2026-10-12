@@ -13,6 +13,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --ponytail-mode) PONYTAIL_MODE="${2:?--ponytail-mode: нужен off|lite|full|ultra}"; shift 2;;
   *) echo "неизвестный аргумент: $1"; exit 1;;
 esac; done
+[ "$WITH_PONYTAIL" = 0 ] && [ -n "$PONYTAIL_MODE" ] && { echo "--no-ponytail и --ponytail-mode вместе не имеют смысла"; exit 1; }
 case "$PONYTAIL_MODE" in ""|off|lite|full|ultra) ;; *) echo "--ponytail-mode: нужен off|lite|full|ultra"; exit 1;; esac
 
 say(){ printf '\n== %s ==\n' "$1"; }
@@ -85,8 +86,9 @@ else warn "uv не найден — поставь хук вручную: python
 
 if [ "$WITH_PONYTAIL" = 1 ]; then
   say "Ponytail (режим ${PONYTAIL_MODE:-по профилю ${ONEC_ACTIVE_PROFILE:-нет, lite}}; только код, документы не сокращает; отключить: --no-ponytail)"
-  if command -v uv >/dev/null 2>&1; then PY="uv run"; else PY="python3"; fi
-  $PY "$TEAM_DIR/scripts/ponytail_setup.py" ${PONYTAIL_MODE:+--mode "$PONYTAIL_MODE"} --project "$WORKDIR" || warn "ponytail_setup с ошибкой (не критично)"
+  if command -v uv >/dev/null 2>&1; then PY=(uv run); else PY=(python3); fi
+  PT_ARGS=(--project "$WORKDIR"); [ -n "$PONYTAIL_MODE" ] && PT_ARGS+=(--mode "$PONYTAIL_MODE")
+  "${PY[@]}" "$TEAM_DIR/scripts/ponytail_setup.py" "${PT_ARGS[@]}" || warn "ponytail_setup с ошибкой (не критично)"
 fi
 
 say "Готово. Ручные шаги"
