@@ -48,4 +48,10 @@ if ($env:AI_TOOLKIT_NO_DISCIPLINE -ne '1') {
   try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $dg install } else { python $dg install } } catch { }
 }
 
+Write-Host "[+] Codex для второго мнения (отключить: AI_TOOLKIT_NO_CODEX=1)"
+if ($env:AI_TOOLKIT_NO_CODEX -ne '1') {
+  $cx = Join-Path $RepoRoot 'scripts\codex_setup.py'
+  try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $cx } else { python $cx } } catch { }
+}
+
 Write-Host "Готово. Перезапусти Claude Code, чтобы подхватились обновлённые скиллы."

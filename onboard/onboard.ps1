@@ -8,12 +8,14 @@
   .\onboard.ps1 -PonytailMode full     # режим Ponytail явно; без него — по ONEC_ACTIVE_PROFILE: analyst → off, иначе lite
   .\onboard.ps1 -NoPonytail            # без плагина Ponytail (правило в AGENTS.md остаётся)
   .\onboard.ps1 -NoDiscipline          # без хука дисциплины (иначе ставится, режим warn)
+  .\onboard.ps1 -NoCodex               # без Codex (плагин и CLI для второго мнения)
 #>
 param(
   [string]$WorkDir = (Get-Location).Path,
   [string]$SrcDir  = $(if ($env:ONEC_SRC_DIR) { $env:ONEC_SRC_DIR } else { "$env:USERPROFILE\erp-src" }),
   [switch]$NoPonytail,
   [switch]$NoDiscipline,
+  [switch]$NoCodex,
   [ValidateSet('off','lite','full','ultra')][string]$PonytailMode
 )
 $ErrorActionPreference = 'Stop'
@@ -119,6 +121,13 @@ if (-not $NoDiscipline) {
   Say "Дисциплина: не дать сказать «готово» без проверки (режим warn; AI_TOOLKIT_DISCIPLINE=off|warn|enforce; не ставить: -NoDiscipline; убрать: discipline_gate.py uninstall)"
   try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $dg install } else { python $dg install } }
   catch { Warn "discipline_gate с ошибкой (не критично)" }
+}
+
+if (-not $NoCodex) {
+  Say "Codex для второго мнения (плагин + CLI; из РФ, РБ и других стран без OpenAI нужен VPN; не ставить: -NoCodex)"
+  $cx = Join-Path $TeamDir 'scripts\codex_setup.py'
+  try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $cx } else { python $cx } }
+  catch { Warn "codex_setup с ошибкой (не критично)" }
 }
 
 Say "Готово. Ручные шаги"

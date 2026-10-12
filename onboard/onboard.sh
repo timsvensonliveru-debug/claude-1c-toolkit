@@ -5,13 +5,15 @@
 #                                                         # analyst → off, остальные и без профиля → lite
 #          bash onboard/onboard.sh --no-ponytail          # без плагина Ponytail (правило в AGENTS.md остаётся)
 #          bash onboard/onboard.sh --no-discipline        # без хука дисциплины (иначе ставится, режим warn)
+#          bash onboard/onboard.sh --no-codex             # без Codex (плагин и CLI для второго мнения)
 set -euo pipefail
-WORKDIR="$(pwd)"; SRC_DIR="${ONEC_SRC_DIR:-$HOME/erp-src}"; WITH_PONYTAIL=1; PONYTAIL_MODE=""; WITH_DISCIPLINE=1
+WORKDIR="$(pwd)"; SRC_DIR="${ONEC_SRC_DIR:-$HOME/erp-src}"; WITH_PONYTAIL=1; PONYTAIL_MODE=""; WITH_DISCIPLINE=1; WITH_CODEX=1
 while [ $# -gt 0 ]; do case "$1" in
   --srcdir) SRC_DIR="$2"; shift 2;;
   --workdir) WORKDIR="$2"; shift 2;;
   --no-ponytail) WITH_PONYTAIL=0; shift;;
   --no-discipline) WITH_DISCIPLINE=0; shift;;
+  --no-codex) WITH_CODEX=0; shift;;
   --ponytail-mode) PONYTAIL_MODE="${2:?--ponytail-mode: нужен off|lite|full|ultra}"; shift 2;;
   *) echo "неизвестный аргумент: $1"; exit 1;;
 esac; done
@@ -97,6 +99,11 @@ if command -v uv >/dev/null 2>&1; then PY=(uv run); else PY=(python3); fi
 if [ "$WITH_DISCIPLINE" = 1 ]; then
   say "Дисциплина: не дать сказать «готово» без проверки (режим warn; AI_TOOLKIT_DISCIPLINE=off|warn|enforce; не ставить: --no-discipline; убрать: discipline_gate.py uninstall)"
   "${PY[@]}" "$TEAM_DIR/scripts/discipline_gate.py" install || warn "discipline_gate с ошибкой (не критично)"
+fi
+
+if [ "$WITH_CODEX" = 1 ]; then
+  say "Codex для второго мнения (плагин + CLI; из РФ, РБ и других стран без OpenAI нужен VPN; не ставить: --no-codex)"
+  "${PY[@]}" "$TEAM_DIR/scripts/codex_setup.py" || warn "codex_setup с ошибкой (не критично)"
 fi
 
 say "Готово. Ручные шаги"

@@ -90,6 +90,23 @@ Stop-хук `scripts/discipline_gate.py` не даёт закончить ход
 доделывать), `off`. Не ставить: `--no-discipline` / `-NoDiscipline` при онбординге, `AI_TOOLKIT_NO_DISCIPLINE=1` при обновлении.
 Выключить насовсем: `"env": {"AI_TOOLKIT_DISCIPLINE": "off"}` в своих настройках, установщик его не перебивает.
 Убрать хук: `python scripts/discipline_gate.py uninstall`.
+
+## Второе мнение: Codex, Copilot, модель без обучения
+
+Claude не проверяет сам себя: ревью и проверку решений выносит модель другого семейства.
+`scripts/second_opinion.py review --base origin/main` или `ask "контекст и вопрос"` идёт по цепочке и
+вызывает только настроенное: **Codex** (CLI и вход) → **Copilot или другой корпоративный ассистент**
+(`AI_TOOLKIT_COPILOT_CMD` — команда, читающая вопрос со STDIN) → **модель без обучения** (только при
+`OPENROUTER_API_KEY` и `AI_TOOLKIT_NOTRAIN=1`; провайдеры без хранения и обучения, текст без e-mail и
+телефонов). Бесплатные модели не вызываются: они обучаются на запросах. Не ответил никто — код 2.
+`status` показывает, что настроено.
+
+Codex ставится онбордингом и обновлением (`scripts/codex_setup.py`: официальный плагин
+[openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc) и CLI через npm). Подходит любой план
+ChatGPT, включая бесплатный: вход один раз `codex login`. Для рабочего кода выключи обучение:
+ChatGPT → Settings → Data Controls → Improve the model for everyone → Off. OpenAI не работает в части стран
+(в том числе РФ и РБ): `codex_setup.py --check` отличает геоблок от сбоя сети, нужен корпоративный VPN.
+Не ставить: `--no-codex` / `-NoCodex`, `AI_TOOLKIT_NO_CODEX=1` при обновлении.
 `uninstall`/`remove` не годятся: следующее обновление поставит плагин снова. На время сессии — `stop ponytail`.
 
 ## Идея
