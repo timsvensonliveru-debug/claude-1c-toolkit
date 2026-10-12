@@ -40,4 +40,9 @@ if [ "${AI_TOOLKIT_NO_PONYTAIL:-}" != 1 ]; then
   else python3 "$REPO_ROOT/scripts/ponytail_setup.py" || true; fi
 fi
 
+echo "[+] Дисциплина (хук «готово только с проверкой»; отключить: AI_TOOLKIT_NO_DISCIPLINE=1)"
+DG_ARG=install; [ "${AI_TOOLKIT_NO_DISCIPLINE:-}" = 1 ] && DG_ARG=uninstall
+if command -v uv >/dev/null 2>&1; then uv run "$REPO_ROOT/scripts/discipline_gate.py" "$DG_ARG" || true
+else python3 "$REPO_ROOT/scripts/discipline_gate.py" "$DG_ARG" || true; fi
+
 echo "Готово. Перезапусти Claude Code, чтобы подхватились обновлённые скиллы."

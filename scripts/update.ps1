@@ -42,4 +42,9 @@ if ($env:AI_TOOLKIT_NO_PONYTAIL -ne '1') {
   try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $pt } else { python $pt } } catch { }
 }
 
+Write-Host "[+] Дисциплина (хук «готово только с проверкой»; отключить: AI_TOOLKIT_NO_DISCIPLINE=1)"
+$dg = Join-Path $RepoRoot 'scripts\discipline_gate.py'
+$dgArg = if ($env:AI_TOOLKIT_NO_DISCIPLINE -eq '1') { 'uninstall' } else { 'install' }
+try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $dg $dgArg } else { python $dg $dgArg } } catch { }
+
 Write-Host "Готово. Перезапусти Claude Code, чтобы подхватились обновлённые скиллы."

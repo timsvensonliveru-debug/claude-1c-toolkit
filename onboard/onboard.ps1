@@ -7,11 +7,13 @@
 .EXAMPLE
   .\onboard.ps1 -PonytailMode full     # режим Ponytail явно; без него — по ONEC_ACTIVE_PROFILE: analyst → off, иначе lite
   .\onboard.ps1 -NoPonytail            # без плагина Ponytail (правило в AGENTS.md остаётся)
+  .\onboard.ps1 -NoDiscipline          # без хука дисциплины (иначе ставится, режим warn)
 #>
 param(
   [string]$WorkDir = (Get-Location).Path,
   [string]$SrcDir  = $(if ($env:ONEC_SRC_DIR) { $env:ONEC_SRC_DIR } else { "$env:USERPROFILE\erp-src" }),
   [switch]$NoPonytail,
+  [switch]$NoDiscipline,
   [ValidateSet('off','lite','full','ultra')][string]$PonytailMode
 )
 $ErrorActionPreference = 'Stop'
@@ -111,6 +113,15 @@ if (-not $NoPonytail) {
     else { python $pt @ptArgs }
   } catch { Warn "ponytail_setup с ошибкой (не критично)" }
 }
+
+$dg = Join-Path $TeamDir 'scripts\discipline_gate.py'
+if ($NoDiscipline) { Say "Дисциплина выключена (-NoDiscipline)" } else {
+  Say "Дисциплина: не дать сказать «готово» без проверки (режим warn; AI_TOOLKIT_DISCIPLINE=off|warn|enforce; отключить: -NoDiscipline)"
+}
+try {
+  $dgArg = if ($NoDiscipline) { 'uninstall' } else { 'install' }
+  if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $dg $dgArg } else { python $dg $dgArg }
+} catch { Warn "discipline_gate с ошибкой (не критично)" }
 
 Say "Готово. Ручные шаги"
 @"
