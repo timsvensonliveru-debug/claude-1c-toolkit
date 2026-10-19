@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-20
+
 ### Added
 - Плагин [Ponytail](https://github.com/DietrichGebert/ponytail) (MIT) для Claude Code и Codex ставится установщиком
   и обновлением по умолчанию (`scripts/ponytail_setup.py`; отключить — `--no-ponytail`). Режим по роли, аналитику
