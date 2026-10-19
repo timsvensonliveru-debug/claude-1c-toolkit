@@ -54,4 +54,10 @@ if ($env:AI_TOOLKIT_NO_CODEX -ne '1') {
   try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $cx } else { python $cx } } catch { }
 }
 
+Write-Host "[+] M365 Copilot для второго мнения (отключить: AI_TOOLKIT_NO_COPILOT=1)"
+if ($env:AI_TOOLKIT_NO_COPILOT -ne '1') {
+  $cp = Join-Path $RepoRoot 'scripts\copilot_setup.py'
+  try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $cp } else { python $cp } } catch { }
+}
+
 Write-Host "Готово. Перезапусти Claude Code, чтобы подхватились обновлённые скиллы."

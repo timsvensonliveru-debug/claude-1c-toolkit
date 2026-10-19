@@ -18,6 +18,9 @@
 - Второе мнение другой моделью: `scripts/second_opinion.py` (цепочка Codex → Copilot или иной ассистент →
   модель без обучения, только настроенное) и `scripts/codex_setup.py` (плагин Codex для Claude Code и CLI,
   проверка геоблока OpenAI). Ставится онбордингом и обновлением, отказ — `--no-codex`.
+- M365 Copilot — второе мнение по умолчанию: адаптер `scripts/copilot_adapter.py` (Playwright), подготовка и вход
+  `scripts/copilot_setup.py`; `--risk critical|normal|low`, вложения `--file`; e-mail и телефоны уходят только
+  доверенному ассистенту (Copilot), Codex и внешние модели их не получают. Отказ — `--no-copilot`.
 
 ### Changed
 - **История репозитория переписана 05.10.2026:** из старых коммитов убраны внутренние идентификаторы. Файлы

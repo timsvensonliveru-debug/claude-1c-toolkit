@@ -9,6 +9,7 @@
   .\onboard.ps1 -NoPonytail            # без плагина Ponytail (правило в AGENTS.md остаётся)
   .\onboard.ps1 -NoDiscipline          # без хука дисциплины (иначе ставится, режим warn)
   .\onboard.ps1 -NoCodex               # без Codex (плагин и CLI для второго мнения)
+  .\onboard.ps1 -NoCopilot             # без M365 Copilot (второе мнение по умолчанию)
 #>
 param(
   [string]$WorkDir = (Get-Location).Path,
@@ -16,6 +17,7 @@ param(
   [switch]$NoPonytail,
   [switch]$NoDiscipline,
   [switch]$NoCodex,
+  [switch]$NoCopilot,
   [ValidateSet('off','lite','full','ultra')][string]$PonytailMode
 )
 $ErrorActionPreference = 'Stop'
@@ -128,6 +130,12 @@ if (-not $NoCodex) {
   $cx = Join-Path $TeamDir 'scripts\codex_setup.py'
   try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $cx } else { python $cx } }
   catch { Warn "codex_setup с ошибкой (не критично)" }
+}
+if (-not $NoCopilot) {
+  Say "M365 Copilot: второе мнение по умолчанию (браузер для адаптера; вход один раз; не ставить: -NoCopilot)"
+  $cp = Join-Path $TeamDir 'scripts\copilot_setup.py'
+  try { if (Get-Command uv -ErrorAction SilentlyContinue) { uv run $cp } else { python $cp } }
+  catch { Warn "copilot_setup с ошибкой (не критично)" }
 }
 
 Say "Готово. Ручные шаги"

@@ -52,4 +52,10 @@ if [ "${AI_TOOLKIT_NO_CODEX:-}" != 1 ]; then
   else python3 "$REPO_ROOT/scripts/codex_setup.py" || true; fi
 fi
 
+echo "[+] M365 Copilot для второго мнения (отключить: AI_TOOLKIT_NO_COPILOT=1)"
+if [ "${AI_TOOLKIT_NO_COPILOT:-}" != 1 ]; then
+  if command -v uv >/dev/null 2>&1; then uv run "$REPO_ROOT/scripts/copilot_setup.py" || true
+  else python3 "$REPO_ROOT/scripts/copilot_setup.py" || true; fi
+fi
+
 echo "Готово. Перезапусти Claude Code, чтобы подхватились обновлённые скиллы."
