@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- `scripts/bsl_ls_top.py` и вызов из PostToolUse-хука: необязательный прогон BSL LS с показом девяти частых ключей SonarQube; без jar или java молчит, отключение `AI_TOOLKIT_BSLLS_GATE=off`.
 - `core/skills/1c-dev/references/sonar-top-rules.md`: девять самых частых замечаний SonarQube (BSL) и как писать код, чтобы их не было.
 
 ### Changed

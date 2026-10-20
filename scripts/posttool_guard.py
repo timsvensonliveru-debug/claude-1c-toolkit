@@ -33,6 +33,10 @@ def findings_for(path: str) -> list[str]:
         rc, out = _run("bsl_guard.py", path)
         if rc != 0 and out:
             notes.append("bsl_guard — возможен запрос/обращение к БД в цикле:\n" + out)
+    if low.endswith(".bsl"):
+        rc, out = _run("bsl_ls_top.py", path)
+        if out:
+            notes.append("BSL LS — частые замечания SonarQube (отключить: AI_TOOLKIT_BSLLS_GATE=off):\n" + out)
     if low.endswith((".bsl", ".mdo", ".rights")):
         rc, out = _run("rights_guard.py", "--json", path)
         try:
