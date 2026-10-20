@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Added
+- `core/skills/1c-dev/references/sonar-top-rules.md`: девять самых частых замечаний SonarQube (BSL) и как писать код, чтобы их не было.
+
+### Changed
+- README описывает продукт; Ponytail, дисциплина и второе мнение вынесены в `docs/WORKFLOW_GUARDS.md`.
+
 ## [2.4.1] - 2026-10-20
 
 ### Fixed
