@@ -6,6 +6,7 @@
 
 ### Added
 - `scripts/bsl_ls_top.py` и вызов из PostToolUse-хука: необязательный прогон BSL LS с показом девяти частых ключей SonarQube; без jar или java молчит, отключение `AI_TOOLKIT_BSLLS_GATE=off`.
+- `docs/preprod-first-login.md` (вклад Артёма Сёмина): почему батч-прогоны виснут на базе-копии и как свести лечение к одному интерактивному запуску в день, с гардом от запуска на проде.
 - `core/skills/1c-dev/references/sonar-top-rules.md`: девять самых частых замечаний SonarQube (BSL) и как писать код, чтобы их не было.
 
 ### Changed
