@@ -6,6 +6,7 @@
 
 ### Added
 - `scripts/bsl_ls_top.py` и вызов из PostToolUse-хука: необязательный прогон BSL LS с показом девяти частых ключей SonarQube; без jar или java молчит, отключение `AI_TOOLKIT_BSLLS_GATE=off`.
+- Справочники агента `1c-dev`: `skd-programmatic.md`, `skd-user-settings.md`, `dynamic-list.md`, `additional-props.md` (СКД из кода, пользовательские настройки, динамические списки, дополнительные реквизиты и сведения) и пункты 12–16 в `ai-pitfalls.md`. Непроверенное помечено `[проверить]`.
 - `docs/preprod-first-login.md` (вклад Артёма Сёмина): почему батч-прогоны виснут на базе-копии и как свести лечение к одному интерактивному запуску в день, с гардом от запуска на проде.
 - `core/skills/1c-dev/references/sonar-top-rules.md`: девять самых частых замечаний SonarQube (BSL) и как писать код, чтобы их не было.
 
@@ -13,6 +14,7 @@
 - README описывает продукт; Ponytail, дисциплина и второе мнение вынесены в `docs/WORKFLOW_GUARDS.md`.
 
 ### Fixed
+- `dev-workflow.md`: составной тип больше не помечен как «остаётся человеку» (правка делается `edit-type`).
 - `onec-ops`: необязательные аргументы `zabbix_api_tool.params`, `zabbix_perf_report_tool.hosts` и
   `event_log_parse_tool.events` (по умолчанию `None`) объявлены как `dict`/`list` без `None` — схема MCP
   обещала `"default": null`, но явный `null` от клиента падал на валидации до вызова инструмента. Теперь
