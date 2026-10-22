@@ -23,6 +23,7 @@
 - README описывает продукт; Ponytail, дисциплина и второе мнение вынесены в `docs/WORKFLOW_GUARDS.md`.
 
 ### Fixed
+- В подсказке `designer_sync.py --contour` пример ключа базы заменён на нейтральный.
 - `dev-workflow.md`: составной тип больше не помечен как «остаётся человеку» (правка делается `edit-type`).
 - `onec-ops`: необязательные аргументы `zabbix_api_tool.params`, `zabbix_perf_report_tool.hosts` и
   `event_log_parse_tool.events` (по умолчанию `None`) объявлены как `dict`/`list` без `None` — схема MCP
