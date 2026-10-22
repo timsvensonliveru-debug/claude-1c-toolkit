@@ -1,0 +1,11 @@
+{
+ "id": "doc-comment",
+ "topic": "Замечания SonarQube",
+ "prompt": "Sonar пишет MissingParameterDescription и MissingReturnedValueDescription для функции ЗаказМожноЗакрыть(Заказ, УчитыватьОплату). Покажи правильный комментарий к ней. Файлы не создавай.",
+ "must": [
+  "Параметры:",
+  "Возвращаемое значение:"
+ ],
+ "must_not": [],
+ "note": "формат документирующего комментария"
+}

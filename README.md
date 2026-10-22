@@ -194,6 +194,7 @@ Toolkit — не только про код: смежные системы SDLC/
 - [docs/MR_REVIEW.md](docs/MR_REVIEW.md) — ревью merge request на 1С: чек-лист, размер MR, первый проход, ворота в CI, вторая модель, метрики пропущенных дефектов.
 - [docs/SERVICEDESK.md](docs/SERVICEDESK.md) — коннектор ManageEngine ServiceDesk Plus API v3: чтение заявок, создание по шаблону с подтверждением, подключение.
 - Администратору БД: `core/skills/1c-dba/references/` — [параметры PostgreSQL под 1С и источники](core/skills/1c-dba/references/postgres-tuning.md), [диагностика по порядку](core/skills/1c-dba/references/postgres-troubleshooting.md), [сайт рядом с 1С](core/skills/1c-dba/references/postgres-site-workloads.md), [режим инцидента](core/skills/1c-dba/references/incident-response.md).
+- [docs/AGENT_EVAL.md](docs/AGENT_EVAL.md) — оценочный стенд агента: задачи с эталонными признаками, прогон, сводка по темам.
 - [docs/TOOLS.md](docs/TOOLS.md) — каталог инструментов: что внутри, что делает, как пользоваться.
 - [docs/sonarqube-bsl-agent.md](docs/sonarqube-bsl-agent.md) — SonarQube с анализатором BSL: как агенту читать замечания, отличать ложные срабатывания от дефектов и чем их гасить.
 - [docs/AGENT_SETUP.md](docs/AGENT_SETUP.md) — как поручить настройку самому ИИ-агенту (готовый промпт).

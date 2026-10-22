@@ -64,6 +64,7 @@
 - **Git-хуки** (`scripts/git-hooks/`, ставит `scripts/install_git_hooks.py`): `pre-push` — точка расширения для проверок репозитория (`scripts/hooks/pre-push`) плюс `git lfs pre-push`; `commit-msg` держит сообщения чистыми,
   `pre-commit` запускает проверку на запрос в цикле.
 - **`scripts/bsl_ls_top.py`** — необязательный прогон BSL LS по частым ключам SonarQube после правки (нужны `BSL_JAR` и java; отключить `AI_TOOLKIT_BSLLS_GATE=off`).
+- **`scripts/agent_eval.py`** — оценочный стенд агента: задачи по 1С с проверяемым признаком верного ответа, прогон и сводка по темам (`docs/AGENT_EVAL.md`).
 - **`scripts/docs_sync_check.py`** — напоминание, что новая возможность отражена в README, CHANGELOG и `.env.example` (хук `pre-commit` запускает его без блокировки).
 - **Дисциплина и второе мнение** — `scripts/discipline_gate.py`, `scripts/second_opinion.py` (см. `docs/WORKFLOW_GUARDS.md`).
 - Дополнительно движок метаданных защищает от поломки схемы компоновки данных и от случайного сдвига свойств.
