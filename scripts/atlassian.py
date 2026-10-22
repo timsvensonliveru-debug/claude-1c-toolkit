@@ -283,7 +283,39 @@ def md_to_storage(md: str) -> str:
     return "".join(out)
 
 
-def conf_publish(path: str, parent: str, title: str | None, dry: bool) -> int:
+def _space_titles(space: str, cap: int = 1000) -> list[str]:
+    """Заголовки страниц пространства (для автоссылок): постранично по CQL, не больше cap."""
+    titles, start = [], 0
+    while len(titles) < cap:
+        q = urllib.parse.urlencode({"cql": f'space = "{space}" and type = page', "limit": "200", "start": str(start)})
+        res = _req("CONFLUENCE", f"/rest/api/content/search?{q}").get("results") or []
+        titles += [r.get("title", "") for r in res if r.get("title")]
+        if len(res) < 200:
+            break
+        start += 200
+    return titles
+
+
+def _child_titles(pid: str) -> list[str]:
+    out, start = [], 0
+    while True:
+        res = _req("CONFLUENCE", f"/rest/api/content/{pid}/child/page?limit=200&start={start}").get("results") or []
+        out += [r.get("title", "") for r in res if r.get("title")]
+        if len(res) < 200:
+            return out
+        start += 200
+
+
+def conf_structure(ref: str) -> int:
+    """Подсказка: пора ли группировать дочерние страницы раздела (порог и типы в structure_check.py)."""
+    import structure_check
+    pid = conf_page_id(ref)
+    name = _req("CONFLUENCE", f"/rest/api/content/{pid}").get("title", ref)
+    print(structure_check.report(structure_check.analyze(name, _child_titles(pid))))
+    return 0
+
+
+def conf_publish(path: str, parent: str, title: str | None, dry: bool, linkify: bool = True) -> int:
     md = open(path, encoding="utf-8").read()
     if not title:
         m = re.search(r"^# (.+)$", md, re.M)
@@ -294,6 +326,15 @@ def conf_publish(path: str, parent: str, title: str | None, dry: bool) -> int:
         return 0
     parent_id = conf_page_id(parent)
     space = (_req("CONFLUENCE", f"/rest/api/content/{parent_id}?expand=space").get("space") or {}).get("key")
+    if linkify:
+        import confluence_linkify
+        titles = _space_titles(space)
+        storage, linked, unresolved = confluence_linkify.linkify_storage(
+            storage, lambda text, fuzzy=True: confluence_linkify.best_title(text, titles, fuzzy))
+        if linked:
+            print(f"ссылок на страницы: {len(linked)}")
+        for u in unresolved:
+            print(f"! страница «{u}» не найдена в пространстве {space}: название осталось текстом")
     q = urllib.parse.urlencode({"cql": f'space = "{space}" and title = "{title}"', "limit": "1"})
     hit = _req("CONFLUENCE", f"/rest/api/content/search?{q}").get("results") or []
     if hit:
@@ -309,6 +350,10 @@ def conf_publish(path: str, parent: str, title: str | None, dry: bool) -> int:
             "ancestors": [{"id": int(parent_id)}],
             "body": {"storage": {"value": storage, "representation": "storage"}}})
         print(f"created: {title} id={d.get('id')}")
+    import structure_check
+    res = structure_check.analyze(title, _child_titles(parent_id))
+    if res["verdict"] != "не трогать":
+        print("СТРУКТУРА: " + structure_check.report(dict(res, section="родитель")).replace("\n", "\n  "))
     return 0
 
 
@@ -346,6 +391,9 @@ def main(argv=None) -> int:
     cb.add_argument("--parent", required=True, help="id/URL родительской страницы")
     cb.add_argument("--title")
     cb.add_argument("--dry", action="store_true")
+    cb.add_argument("--no-linkify", action="store_true", help="не превращать названия страниц в ссылки")
+    cr = sc.add_parser("structure", help="пора ли группировать дочерние страницы раздела")
+    cr.add_argument("ref")
 
     a = p.parse_args(argv)
     if a.svc == "jira":
@@ -356,7 +404,9 @@ def main(argv=None) -> int:
         return conf_tree(a.ref, a.depth)
     if a.cmd == "search":
         return conf_search(a.query, a.limit)
-    return conf_publish(a.file, a.parent, a.title, a.dry)
+    if a.cmd == "structure":
+        return conf_structure(a.ref)
+    return conf_publish(a.file, a.parent, a.title, a.dry, not a.no_linkify)
 
 
 if __name__ == "__main__":

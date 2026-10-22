@@ -43,3 +43,52 @@ def test_headers_bearer_and_basic(monkeypatch):
     assert atlassian._headers("JIRA")["Authorization"] == "Bearer t0k"
     monkeypatch.setenv("JIRA_USER", "u@e.x")
     assert atlassian._headers("JIRA")["Authorization"].startswith("Basic ")
+
+
+def _fake_conf(monkeypatch, space_titles, children):
+    """Подмена сетевых вызовов Confluence: пространство из space_titles, у родителя 99 дети children."""
+    sent = {}
+
+    def req(kind, path, payload=None, method=None):
+        if "/child/page" in path:
+            return {"results": [{"title": t} for t in children]}
+        if "expand=space" in path:
+            return {"space": {"key": "SP"}}
+        if "cql=" in path and "title+%3D" in path:
+            return {"results": []}
+        if "cql=" in path:
+            return {"results": [{"title": t} for t in space_titles]}
+        if method == "PUT" or (payload and "body" in payload):
+            sent["payload"] = payload
+            return {"id": "7"}
+        return {}
+
+    monkeypatch.setattr(atlassian, "_req", req)
+    monkeypatch.setattr(atlassian, "conf_page_id", lambda ref: "99")
+    return sent
+
+
+def test_publish_links_quoted_page_title(monkeypatch, tmp_path, capsys):
+    sent = _fake_conf(monkeypatch, ["Журнал решений"], [])
+    f = tmp_path / "p.md"
+    f.write_text("# Страница\nСм. страницу «Журнал решений» и «Нет такой страницы»\n", encoding="utf-8")
+    atlassian.conf_publish(str(f), "99", None, False)
+    body = sent["payload"]["body"]["storage"]["value"]
+    assert 'ri:content-title="Журнал решений"' in body
+    assert "«Нет такой страницы»" in body
+    atlassian.conf_publish(str(f), "99", None, False, linkify=False)
+    assert "ac:link" not in sent["payload"]["body"]["storage"]["value"]
+
+
+def test_publish_structure_hint_only_for_mixed_big_section(monkeypatch, tmp_path, capsys):
+    mixed = ["Архитектура обмена", "Решение по справочникам", "Итоги встречи 01.10", "Технический проект модуля",
+             "Технический проект сервиса", "Контракт API", "Задача разработчику", "Постановка аналитику",
+             "План и риски"]
+    _fake_conf(monkeypatch, [], mixed)
+    f = tmp_path / "p.md"
+    f.write_text("# Страница\nтекст\n", encoding="utf-8")
+    atlassian.conf_publish(str(f), "99", None, False)
+    assert "СТРУКТУРА" in capsys.readouterr().out
+    _fake_conf(monkeypatch, [], ["Постановка 1", "Постановка 2", "План"])
+    atlassian.conf_publish(str(f), "99", None, False)
+    assert "СТРУКТУРА" not in capsys.readouterr().out
