@@ -308,6 +308,7 @@ def main(argv=None, client: SDClient | None = None) -> int:
     if a.json:
         print(json.dumps(items, ensure_ascii=False))
     else:
+        print("номер\tстатус\tгруппа\tтема")
         for it in items:
             print(f'{it.get("display_id") or it.get("id")}\t{it.get("status")}\t{it.get("group")}\t{it.get("subject")}')
         print(f"-- заявок: {len(items)}")
