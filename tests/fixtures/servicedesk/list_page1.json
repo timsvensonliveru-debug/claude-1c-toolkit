@@ -1,0 +1,10 @@
+{"response_status": [{"status_code": 2000, "status": "success"}],
+ "list_info": {"has_more_rows": true, "start_index": 1, "page": 1, "row_count": 2},
+ "requests": [
+  {"id": "101", "display_id": "1001", "subject": "Не печатает принтер", "status": {"name": "Open", "id": "1"},
+   "group": {"name": "Поддержка", "id": "7"}, "priority": {"name": "High"},
+   "created_time": {"display_value": "Oct 20, 2026 10:00 AM", "value": "1792490400000"},
+   "requester": {"name": "Иван Иванов", "email_id": "ivan@example.com", "phone": "123"},
+   "technician": {"name": "Пётр Петров"}, "attachments": [{"name": "scan.pdf"}]},
+  {"id": "102", "display_id": "1002", "subject": "Доступ к базе", "status": {"name": "Open"},
+   "group": {"name": "Поддержка"}, "created_time": {"display_value": "Oct 20, 2026 11:00 AM", "value": "1792494000000"}}]}

@@ -1,0 +1,2 @@
+{"response_status": {"status_code": 4000, "status": "failed",
+  "messages": [{"status_code": 4002, "type": "failed", "message": "User does not have this permission"}]}}

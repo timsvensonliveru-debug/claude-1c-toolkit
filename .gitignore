@@ -11,6 +11,7 @@
 credentials*.json
 # локализация с именами хостов/дашбордов контуров — в свой командный репозиторий, не сюда
 config/zabbix-contours.toml
+config/servicedesk.toml
 
 # Локальное окружение
 # .mcp.json — ЛОКАЛЬНЫЙ/генерируемый (onboard+switch_source localize его под контур: Docker-central/локальные пути).

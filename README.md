@@ -189,6 +189,7 @@ Toolkit — не только про код: смежные системы SDLC/
 - [docs/METHODOLOGY_MAP.md](docs/METHODOLOGY_MAP.md) — карта: подходы с курсов (SDD, Memory Bank, Kiro, субагенты, Shotgun) → наши документы и процесс.
 - [docs/WORKFLOW_GUARDS.md](docs/WORKFLOW_GUARDS.md) — Ponytail, лестница решения, Stop-хук дисциплины, второе мнение.
 - [docs/MR_REVIEW.md](docs/MR_REVIEW.md) — ревью merge request на 1С: чек-лист, размер MR, первый проход, ворота в CI, вторая модель, метрики пропущенных дефектов.
+- [docs/SERVICEDESK.md](docs/SERVICEDESK.md) — коннектор ManageEngine ServiceDesk Plus API v3: чтение заявок, создание по шаблону с подтверждением, подключение.
 - [docs/TOOLS.md](docs/TOOLS.md) — каталог инструментов: что внутри, что делает, как пользоваться.
 - [docs/sonarqube-bsl-agent.md](docs/sonarqube-bsl-agent.md) — SonarQube с анализатором BSL: как агенту читать замечания, отличать ложные срабатывания от дефектов и чем их гасить.
 - [docs/AGENT_SETUP.md](docs/AGENT_SETUP.md) — как поручить настройку самому ИИ-агенту (готовый промпт).
