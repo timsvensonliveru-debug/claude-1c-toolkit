@@ -223,7 +223,7 @@ def main(argv=None):
     common.add_argument("--base", required=True, help="каталог файловой ИБ или сервер\\база")
     common.add_argument("--out", default="designer_src", help="каталог выгрузки (по умолчанию ./designer_src)")
     common.add_argument("--ext", help="имя расширения (иначе основная конфигурация)")
-    common.add_argument("--contour", help="ключ пароля ONEC_IB_PASS_<КЛЮЧ>; КЛЮЧ = имя базы UPPER (см. bases.*.toml), напр. SLEEPMARKETRB_ERP_TEST")
+    common.add_argument("--contour", help="ключ пароля ONEC_IB_PASS_<КЛЮЧ>; КЛЮЧ = имя базы UPPER (см. bases.*.toml), напр. MYBASE_ERP_TEST")
     common.add_argument("--host", help="алиас ssh хоста рядом с кластером (~/.ssh/config); "
                         "без него — платформа этой машины (сеть до сервера напрямую)")
     p = sub.add_parser("dump", parents=[common], help="точечная выгрузка объектов")
