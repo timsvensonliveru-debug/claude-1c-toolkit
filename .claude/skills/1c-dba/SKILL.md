@@ -54,6 +54,9 @@ Enterprise + мажорная версия), ОС (RED OS / Astra / RHEL / Windo
 (`shared_buffers` = 25% RAM, `work_mem` от памяти на сеанс, `max_parallel_workers` = N ядер и т.д.) —
 **считаются от этих чисел**, не берутся как константы.
 
+## Диагностика PostgreSQL под 1С → `references/postgres-troubleshooting.md`
+Что смотреть первым, типовые проблемы (медленные запросы, блокировки, раздувание и автовакуум, нехватка соединений, временные файлы, статистика, ошибки памяти, своп, диск и WAL, collation при переносе), команды диагностики, порядок действий и когда эскалировать. Сайт рядом с 1С на одном PostgreSQL (пул соединений, различия параметров) — `references/postgres-site-workloads.md`. Источники и расхождения между ними для параметров — раздел в `postgres-tuning.md`.
+
 ## Тюнинг PostgreSQL под 1С → `references/postgres-tuning.md`
 Память (`shared_buffers`, `work_mem`, `maintenance_work_mem`, `temp_buffers`, `effective_cache_size`),
 IO (`random_page_cost`, `effective_io_concurrency`), параллелизм (`max_worker_processes`,

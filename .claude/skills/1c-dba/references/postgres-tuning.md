@@ -25,6 +25,57 @@ sighup. Параметры с пометкой «требует перезапу
 рестарт: `SELECT name, setting, unit, context FROM pg_settings WHERE name = '...';` (`context` =
 `postmaster` → нужен рестарт; `sighup` → reload; `user`/`superuser` → можно на сессию).
 
+## Источники и расхождения между ними
+
+Основа: статья ИТС [1] и приложение K документации Postgres Pro [2]; общая документация PostgreSQL [4] для параметров, которых в них нет. Общие калькуляторы вроде PGTune [6] для 1С не подходят: он считает память под обычное веб-приложение и не выставляет требования платформы (строки, блокировки, временные таблицы). Все значения стартовые, итог подбирается на копии продуктивной базы по нагрузке и мониторингу.
+
+| Параметр | Что говорят источники | Как поступать |
+|---|---|---|
+| `max_locks_per_transaction` | Postgres Pro: 256 [2]; ИТС: 512–2000 для больших конфигураций [1] | начать с 512, поднимать, если есть ошибки нехватки блокировок или «осиротевшие» временные таблицы [1][2] |
+| `max_connections` | от числа сеансов кластера / 8 до / 4, не меньше 500; диапазон 500–8000 (ИТС) и 500–10000 (Postgres Pro) [1][2] | считать от сеансов, не ниже 500 |
+| `synchronous_commit` | ИТС и Postgres Pro: `off` [1][2][4]; практика учётных баз с обменами: оставлять `on` | `off` теряет последние подтверждённые транзакции при сбое сервера (до трёх `wal_writer_delay`), целостность не страдает. На базах с обменами и очередями решать осознанно, по умолчанию `on` |
+| `effective_io_concurrency` | ИТС и Postgres Pro: 2 [1][2]; в замере на одном стенде значение 400 ухудшило APDEX примерно на 3% [5] | начинать с 2; поднимать на SSD только по замерам, а не «до 300» |
+| `max_parallel_workers_per_gather` | Postgres Pro и замер [2][5]: 0 | 0; включать на отдельной нагрузке отчётов только после теста |
+| `from_collapse_limit`, `join_collapse_limit` | 20 (по умолчанию 8) [1][2]; на одном стенде оставлено 8, выигрыша от 20 не замерено [5] | 20 как стартовое значение при быстром процессоре, иначе планирование само станет тормозом |
+| `work_mem` | RAM / 32..64 или 32..256 МБ [1][2] | брать нижнюю часть диапазона: память выделяется на каждую операцию в каждом сеансе, пик в разы выше значения |
+| `huge_pages` | рекомендаций для 1С нет, по умолчанию `try`; `on` требует настроенных huge pages в ядре, иначе сервер не запустится [4] | оставить `try`, **[не подтверждено для 1С]** |
+| `plan_cache_mode` | рекомендаций для 1С нет, по умолчанию `auto` [4] | не менять без замера, **[не подтверждено для 1С]** |
+| `enable_mergejoin` | в практике настройки под 1С встречается `off`; Postgres Pro для 1С советует только `enable_sorted_merge_join = off` (параметр есть лишь в Postgres Pro) [2] | точечно и по замеру, **[проверить по своей версии]** |
+
+Источники (открытые):
+1. [ИТС: настройки PostgreSQL для работы с 1С:Предприятием, часть 2](https://its.1c.ru/db/content/metod8dev/src/developers/scalability/administration/postgresql/i8105866.htm)
+2. [Postgres Pro: приложение K, настройка для решений 1С](https://postgrespro.com/docs/postgrespro/15/one-c-configuring-server)
+3. [ИТС, 2015, платформа 8.1 (устарело)](https://its.1c.ru/db/content/metod8dev/src/developers/scalability/administration/postgresql/i8105825.htm)
+4. Документация PostgreSQL: [ресурсы](https://www.postgresql.org/docs/current/runtime-config-resource.html), [WAL](https://www.postgresql.org/docs/current/runtime-config-wal.html), [планировщик](https://www.postgresql.org/docs/current/runtime-config-query.html), [автовакуум](https://www.postgresql.org/docs/current/runtime-config-autovacuum.html), [ресурсы ядра](https://www.postgresql.org/docs/current/kernel-resources.html), [VACUUM](https://www.postgresql.org/docs/current/routine-vacuuming.html)
+5. [Habr: замеры APDEX на одном стенде, Postgres Pro 13.9](https://habr.com/ru/articles/727250/) (один стенд, не универсальные числа)
+6. [PGTune: исходный код формул](https://github.com/le0pard/pgtune/blob/master/src/features/configuration/configurationSelectors.js)
+7. [Infostart: как сервер 1С меняет параметры у PostgreSQL](https://infostart.ru/1c/articles/2175030/) (полный текст не сверен)
+8. [ИТС: стандарт об ограничениях на соединения с вложенными запросами и виртуальными таблицами](https://its.1c.ru/db/v8std/content/655/hdoc) (нужен вход в ИТС)
+
+### Чем 1С отличается от PGTune
+| Параметр | PGTune (WEB, OLTP) | Для 1С |
+|---|---|---|
+| `shared_buffers`, `effective_cache_size` | RAM / 4, RAM × 3/4 | то же самое |
+| `maintenance_work_mem` | RAM / 16, предел 8 ГБ | RAM / 16..32, до 4 ГБ |
+| `work_mem` | считает от числа соединений и воркеров | 32..256 МБ или RAM / 32..64 |
+| `max_connections` | 200 (WEB), 300 (OLTP) | не меньше 500, от числа сеансов |
+| `min_wal_size`, `max_wal_size` | 1 и 4 ГБ (WEB), 2 и 8 ГБ (OLTP) | 512 МБ..4 ГБ и удвоение |
+| `max_locks_per_transaction`, `temp_buffers`, `standard_conforming_strings`, collapse limits | не выставляет | выставляются |
+| параллельные запросы | включает | отключать |
+PGTune годится как проверка порядка величин по памяти, но не как итоговый конфиг базы 1С.
+
+### Чего не делать
+1. Не выключать `fsync` (риск неустранимой порчи данных при сбое питания) и `autovacuum`.
+2. Не ставить `shared_buffers` выше 40% RAM.
+3. Не копировать `work_mem` по формуле на больших серверах без проверки: потолок равен `max_connections × work_mem`, а операций в запросе несколько.
+4. Не брать конфиг PGTune или конфиг для сайта как есть для базы 1С.
+5. Не использовать pgbouncer в режиме transaction для 1С: временные таблицы привязаны к сеансу, подтверждения совместимости нет, **[не подтверждено]**.
+6. Не включать `huge_pages = on`, пока ядро не настроено.
+7. Не делать ежедневный `VACUUM FULL` рутиной: он берёт эксклюзивную блокировку таблицы и требует места под копию, для рутины хватает обычного `VACUUM` [4].
+8. Не считать значения одного стенда [5] универсальными.
+
+---
+
 Быстрый снимок ключевых параметров:
 ```sql
 SELECT name, setting, unit FROM pg_settings
@@ -113,9 +164,9 @@ shared_buffers (≈50–75% RAM), `temp_buffers` ≈ 256 МБ, `work_mem` = RAM/
   выбор планов: планировщик перестаёт избегать индексов и не уходит в лишние seq scan. Завышение
   `random_page_cost` → seqscan вместо индексов = плохо. На SSD/NVMe-сервере 1С один из первых параметров.
 - **effective_io_concurrency** — число параллельных IO-операций, которые СУБД может инициировать (важно
-  для `bitmap heap scan`). По умолчанию часто **1**. Для SSD/NVMe — ставить заметно выше: начать
-  со **100**, экспериментально поднимать до 200–300, контролируя утилизацию дисков (`iostat`). На HDD
-  оставить низким (= числу шпинделей).
+  для `bitmap heap scan`). По умолчанию часто **1**. ИТС и Postgres Pro для 1С дают **2**; на SSD/NVMe
+  поднимать только по замерам (в одном замере 400 ухудшило APDEX), контролируя утилизацию дисков
+  (`iostat`). На HDD оставить низким (= числу шпинделей). См. «Источники и расхождения».
 - **seq_page_cost** — обычно 1.0, не трогать без причины.
 
 Диагностика IO: `iostat`/`vmstat` (утилизация, await, KB/s), `EXPLAIN (ANALYZE, BUFFERS)` для тяжёлых
@@ -309,9 +360,9 @@ SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'autovacuum:%';
 1. Зафиксировать железо (RAM, физ. ядра, диски, сеансы) и снять диагностику ДО.
 2. Память: `shared_buffers` ≈ 25% RAM, `effective_cache_size` ≈ 50–75%, `maintenance_work_mem`,
    `work_mem`/`temp_buffers` от памяти на сеанс.
-3. IO: `random_page_cost` 1.1–1.5 (SSD), `effective_io_concurrency` от 100 (SSD).
+3. IO: `random_page_cost` 1.1–1.5 (SSD), `effective_io_concurrency` начать с 2, поднимать по замерам (см. «Источники и расхождения»).
 4. Параллелизм: `max_worker_processes`/`max_parallel_workers` = N_CPU,
-   `max_parallel_workers_per_gather` = N_CPU/2.
+   `max_parallel_workers_per_gather` = 0 (включать только после теста на отчётах).
 5. Автовакуум агрессивно: `on`, workers ≈ N/2, cost_limit пропорционально, scale_factor 1%/0.5%,
    логирование.
 6. `pg_stat_temp` в tmpfs (если версия ≤ 14).

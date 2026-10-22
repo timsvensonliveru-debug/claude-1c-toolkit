@@ -37,6 +37,7 @@
   `work_mem`, `maintenance_work_mem`, `effective_cache_size`), IO (`random_page_cost`,
   `effective_io_concurrency`), параллелизм, агрессивный автовакуум под 1С, WAL/контрольные точки, специфика
   Postgres Pro (`pg-setup --tune=1c`, `online_analyze`, `plantuner`) — с формулами расчёта от RAM/ядер.
+- **Диагностика PostgreSQL под 1С** — `core/skills/1c-dba/references/postgres-troubleshooting.md`: что смотреть первым, типовые проблемы (медленные запросы, блокировки, раздувание и автовакуум, соединения, временные файлы, ошибки памяти, своп, диск и WAL, collation при переносе), порядок действий и эскалация. Сайт рядом с 1С — `postgres-site-workloads.md`. Источники и расхождения параметров — раздел в `postgres-tuning.md`.
 - **Регламентное обслуживание** — `core/skills/1c-dba/references/maintenance.md`: VACUUM/ANALYZE, VACUUM FREEZE против
   TXID wraparound, REINDEX CONCURRENTLY и `pg_repack` против распухания (bloat), пороги и расписание; опирается на
   готовые скрипты (см. ниже).
