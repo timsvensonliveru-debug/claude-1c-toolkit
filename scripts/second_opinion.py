@@ -129,6 +129,8 @@ def copilot(prompt: str, files=()) -> str | None:
 def notrain(prompt: str, files=()) -> str | None:
     if files:
         return None                                    # вложить файл в запрос к этому звену нельзя
+    if os.environ.get("AI_TOOLKIT_CORP") == "1":
+        return None                                    # корпоративный код: внешние звенья без договора запрещены
     key = os.environ.get("OPENROUTER_API_KEY", "")
     if not key or os.environ.get("AI_TOOLKIT_NOTRAIN") != "1":
         return None
