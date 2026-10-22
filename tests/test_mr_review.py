@@ -86,3 +86,25 @@ def test_defect_trace_finds_introducing_task(tmp_path):
     sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     res = defect_trace.trace(repo, sha)
     assert list(res["tasks"]) == ["PROJ-9"]
+
+
+def test_docs_sync_check_warns_and_is_quiet_when_documented(tmp_path):
+    import docs_sync_check as dsc
+    repo = _repo(tmp_path)
+    (repo / ".env.example").write_text("EXISTING_VAR=\n", encoding="utf-8")
+    (repo / "README.md").write_text("# r\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "docs base")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "tool.py").write_text('import os\nX = os.environ.get("NEW_SECRET_VAR")\nY = os.getenv("EXISTING_VAR")\n', encoding="utf-8")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "NEWDOC.md").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    w = " ".join(dsc.check(repo))
+    assert "README.md и CHANGELOG.md" in w or "README.md" in w
+    assert "NEWDOC.md" in w and "NEW_SECRET_VAR" in w and "EXISTING_VAR" not in w
+    (repo / "README.md").write_text("# r\n- [doc](docs/NEWDOC.md)\n", encoding="utf-8")
+    (repo / "CHANGELOG.md").write_text("# c\n", encoding="utf-8")
+    (repo / ".env.example").write_text("EXISTING_VAR=\nNEW_SECRET_VAR=\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    assert dsc.check(repo) == []

@@ -77,4 +77,15 @@ if [ -n "$rfiles" ]; then
     fi
   fi
 fi
+
+# --- docs-sync: напоминание про README, CHANGELOG и .env.example (только предупреждение, не блокирует) ---
+dsc=""
+for cand in "$ONEC_TOOLKIT_DIR/scripts/docs_sync_check.py" "$(dirname "$0")/../scripts/docs_sync_check.py" \
+            "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/docs_sync_check.py"; do
+  [ -f "$cand" ] && dsc="$cand" && break
+done
+if [ -n "$dsc" ] && [ -f "$(git rev-parse --show-toplevel 2>/dev/null)/README.md" ]; then
+  "$py" "$dsc" --staged 2>&1 || true
+fi
+
 exit 0
