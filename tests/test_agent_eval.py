@@ -47,3 +47,16 @@ def test_run_with_fake_agent_and_summary(tmp_path, capsys):
 def test_agent_failure_is_reported_not_raised(tmp_path):
     out = ev.run_agent("/nonexistent/binary", "x", 5)
     assert out.startswith("[ошибка запуска")
+
+
+def test_launch_errors_are_not_scored_and_retried(tmp_path, capsys):
+    calls = []
+
+    def flaky(cmd, prompt, timeout, cwd=None):
+        calls.append(1)
+        return "[код 1] limit" if len(calls) == 1 else "ВЫРАЗИТЬ и соединение"
+    ev.main(["run", "--task", "composite-deref", "--out", str(tmp_path)], runner=flaky)
+    out = capsys.readouterr().out
+    assert len(calls) == 2 and "1/1" in out                    # повтор помог, сбой не в зачёте
+    assert ev.grade({"must": ["x"]}, "[ошибка запуска: TimeoutExpired]")["error"] is True
+    assert "не в зачёте" in ev.summarize([{"topic": "т", "passed": False, "error": True}])

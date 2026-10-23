@@ -37,7 +37,14 @@ def load_tasks(ids=None) -> list[dict]:
     return [t for t in tasks if not ids or t["id"] in ids]
 
 
+def is_error(answer: str) -> bool:
+    """Сбой запуска агента (код возврата, таймаут): это не ответ, в зачёт не идёт."""
+    return answer.startswith("[код ") or answer.startswith("[ошибка запуска")
+
+
 def grade(task: dict, answer: str) -> dict:
+    if is_error(answer):
+        return {"passed": False, "error": True, "missing": [], "forbidden": []}
     missing = [rx for rx in task.get("must", []) if not re.search(rx, answer, re.I | re.S)]
     forbidden = [rx for rx in task.get("must_not", []) if re.search(rx, answer, re.I | re.S)]
     return {"passed": bool(answer.strip()) and not missing and not forbidden, "missing": missing, "forbidden": forbidden}
@@ -53,14 +60,18 @@ def run_agent(cmd: str, prompt: str, timeout: int, cwd: Path = ROOT) -> str:
 
 
 def summarize(results: list[dict]) -> str:
-    by = collections.defaultdict(lambda: [0, 0])
+    by = collections.defaultdict(lambda: [0, 0, 0])
     for r in results:
+        if r.get("error"):
+            by[r["topic"]][2] += 1
+            continue
         by[r["topic"]][1] += 1
         by[r["topic"]][0] += 1 if r["passed"] else 0
-    lines = [f'{t:34} {p}/{n}' for t, (p, n) in sorted(by.items())]
-    ok = sum(p for p, _ in by.values())
-    total = sum(n for _, n in by.values())
-    return "\n".join(lines + [f"{'ИТОГО':34} {ok}/{total}"])
+    lines = [f'{t:34} {p}/{n}' + (f'  (сбоев запуска {e})' if e else '') for t, (p, n, e) in sorted(by.items())]
+    ok = sum(v[0] for v in by.values())
+    total = sum(v[1] for v in by.values())
+    err = sum(v[2] for v in by.values())
+    return "\n".join(lines + [f"{'ИТОГО':34} {ok}/{total}" + (f'  (сбоев запуска {err} не в зачёте)' if err else '')])
 
 
 def main(argv=None, runner=run_agent) -> int:
@@ -92,10 +103,13 @@ def main(argv=None, runner=run_agent) -> int:
     bare = Path(tempfile.mkdtemp(prefix="agent_eval_bare_")) if a.bare else None
     for t in load_tasks(a.task):
         for i in range(a.repeat):
-            ans = runner(a.cmd, t["prompt"], a.timeout, bare) if bare else runner(a.cmd, t["prompt"], a.timeout)
+            for _attempt in range(2):                       # один повтор при сбое запуска (лимит, таймаут)
+                ans = runner(a.cmd, t["prompt"], a.timeout, bare) if bare else runner(a.cmd, t["prompt"], a.timeout)
+                if not is_error(ans):
+                    break
             g = grade(t, ans)
             results.append({"id": t["id"], "topic": t["topic"], "run": i + 1, "answer": ans, **g})
-            print(f'{t["id"]:26} #{i + 1} {"ok" if g["passed"] else "НЕТ"} {g["missing"] or ""}')
+            print(f'{t["id"]:26} #{i + 1} {"сбой запуска" if g.get("error") else ("ok" if g["passed"] else "НЕТ")} {g["missing"] or ""}')
     a.out.mkdir(parents=True, exist_ok=True)
     path = a.out / f'{dt.datetime.now():%Y%m%d-%H%M%S}{"-bare" if a.bare else ""}.json'
     path.write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
