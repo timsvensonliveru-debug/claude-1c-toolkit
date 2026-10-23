@@ -8,6 +8,7 @@
                                        [--group ПСЕВДОНИМ] [--technician ИМЯ] [--priority ИМЯ] [--check] [--send]
   (отправка без терминала: --approve-file РЕШЕНИЕ.json, см. docs/SERVICEDESK.md)
   python scripts/servicedesk.py note --request НОМЕР --text "текст" [--send]
+  python scripts/servicedesk.py update --request НОМЕР [--description "текст"] [--due|--start|--end ГГГГ-ММ-ДД] [--send]
   python scripts/servicedesk.py meta [--what templates|technicians|observed|all] [--name ЧАСТЬ_ИМЕНИ]
 
 Окружение (.env, не коммитить): SD_BASE_URL — адрес портала до /api/v3 (для облака вместе с /app/<портал>),
@@ -143,6 +144,13 @@ class SDClient:
         h["Content-Type"] = "application/x-www-form-urlencoded"
         data = urllib.parse.urlencode({"input_data": json.dumps(input_data, ensure_ascii=False)}).encode()
         status, body = self.transport("POST", f"{self.base}/api/v3/{path}", h, data)
+        return self._parse(status, body)
+
+    def put(self, path: str, input_data: dict) -> dict:
+        h = self._headers()
+        h["Content-Type"] = "application/x-www-form-urlencoded"
+        data = urllib.parse.urlencode({"input_data": json.dumps(input_data, ensure_ascii=False)}).encode()
+        status, body = self.transport("PUT", f"{self.base}/api/v3/{path}", h, data)
         return self._parse(status, body)
 
     @staticmethod
@@ -316,6 +324,27 @@ def load_config(path: str | None = None) -> dict:
     return tomllib.loads(p.read_text(encoding="utf-8"))
 
 
+def to_html(text: str) -> str:
+    """Описание и заметки SDP хранит как HTML: переводы строк пропадают, абзацы и пункты сливаются в одну строку
+    (инцидент 23.10.2026, заявка 920325). Простой текст экранируем, абзацы и строки отделяем тегами; готовый HTML не трогаем."""
+    if not text or re.search(r"<(br|p|div|ul|ol|li|b|i|a|table)\b", text, re.I):
+        return text
+    paras = [p for p in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()) if p.strip()]
+    esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return "".join("<p>" + "<br>".join(esc(l.rstrip()) for l in p.split("\n")) + "</p>" for p in paras)
+
+
+def build_update(description: str | None = None, due: str | None = None, start: str | None = None, end: str | None = None) -> dict:
+    """Тело правки заявки: описание и сроки (даты ГГГГ-ММ-ДД в часовом поясе Минска, время 09:00 и 18:00)."""
+    req = {}
+    if description:
+        req["description"] = to_html(description)
+    for key, day, end_of_day in (("due_by_time", due, True), ("scheduled_start_time", start, False), ("scheduled_end_time", end, True)):
+        if day:
+            req[key] = {"value": epoch_ms(day, end_of_day)}
+    return {"request": req}
+
+
 def build_create(cfg: dict, template: str, subject: str, description: str = "", group: str | None = None,
                  technician: str | None = None, priority: str | None = None, requester_id: str | None = None) -> dict:
     """Тело запроса создания заявки по шаблону. Шаблон, группа и техник берутся из конфига (псевдоним) или как есть.
@@ -323,7 +352,7 @@ def build_create(cfg: dict, template: str, subject: str, description: str = "", 
     tpl = (cfg.get("templates") or {}).get(template, template)
     req = {"subject": subject, "template": {"id": str(tpl)} if isinstance(tpl, int) else {"name": tpl}}
     if description:
-        req["description"] = description
+        req["description"] = to_html(description)
     if group:
         req["group"] = {"name": (cfg.get("groups") or {}).get(group, group)}
     tech = technician or (cfg.get("defaults") or {}).get("technician")
@@ -340,7 +369,7 @@ def build_create(cfg: dict, template: str, subject: str, description: str = "", 
 
 def build_note(request_id: str, text: str, show_to_requester: bool = False) -> dict:
     """Тело заметки к заявке. По умолчанию заметка внутренняя (заявителю не показывается, уведомлений нет)."""
-    return {"request_note": {"description": text, "show_to_requester": show_to_requester, "notify_technician": False}}
+    return {"request_note": {"description": to_html(text), "show_to_requester": show_to_requester, "notify_technician": False}}
 
 
 def confirm_send(payload: dict, isatty=None, ask=input, what: str = "заявку") -> bool:
@@ -540,6 +569,14 @@ def main(argv=None, client: SDClient | None = None) -> int:
     nt.add_argument("--visible-to-requester", action="store_true", help="показать заметку заявителю (по умолчанию внутренняя)")
     nt.add_argument("--approve-file", help="файл решения человека вместо ввода в терминале (нужен SD_AGENT_SEND=1)")
     nt.add_argument("--send", action="store_true", help="отправить после ручного подтверждения")
+    up = sub.add_parser("update", help="поправить описание и сроки заявки (по умолчанию сухой прогон)")
+    up.add_argument("--request", required=True)
+    up.add_argument("--description")
+    up.add_argument("--due", help="срок решения ГГГГ-ММ-ДД")
+    up.add_argument("--start", help="плановое начало ГГГГ-ММ-ДД")
+    up.add_argument("--end", help="плановое окончание ГГГГ-ММ-ДД")
+    up.add_argument("--approve-file")
+    up.add_argument("--send", action="store_true")
     ap_ = sub.add_parser("approve", help="записать решение человека для отправки без терминала (привязано к sha256 тела, живёт 2 часа)")
     ap_.add_argument("--digest", required=True, help="sha256 цели и тела из сухого прогона")
     ap_.add_argument("--by", required=True, help="кто принял решение")
@@ -607,6 +644,29 @@ def main(argv=None, client: SDClient | None = None) -> int:
                     release_claim(mark)
                 raise
             print(f"заметка добавлена к заявке {a.request}")
+            return 0
+        if a.cmd == "update":
+            payload = build_update(a.description, a.due, a.start, a.end)
+            target = f"requests/{urllib.parse.quote(str(a.request), safe='')}"
+            if not payload["request"]:
+                print("нечего менять: укажите --description, --due, --start или --end")
+                return 1
+            if not a.send:
+                print("Сухой прогон, ничего не отправлено. Правка заявки " + str(a.request) + ", тело запроса:\n"
+                      + json.dumps(payload, ensure_ascii=False, indent=1) + "\nsha256 цели и тела: " + payload_digest(payload, target))
+                return 0
+            dec = authorize_send(payload, a.approve_file, f"правку заявки {a.request}", target)
+            if not dec:
+                print("Отправка отменена.")
+                return 1
+            mark = claim_approval(dec["id"]) if isinstance(dec, dict) else None
+            try:
+                (client or make_client()).put(target, payload)
+            except BaseException as e:
+                if mark and _definitely_rejected(e):
+                    release_claim(mark)
+                raise
+            print(f"заявка {a.request} обновлена")
             return 0
         if a.cmd == "create":
             payload = build_create(load_config(a.config), a.template, a.subject, a.description, a.group,

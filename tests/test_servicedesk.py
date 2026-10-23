@@ -431,3 +431,17 @@ def test_lock_exit_does_not_remove_foreign_lock(tmp_path, monkeypatch):
     first.path.write_text("чужой токен", encoding="utf-8")      # как будто замок перехватил другой запуск
     first.__exit__()
     assert first.path.exists()
+
+
+def test_description_newlines_become_html_so_points_do_not_merge():
+    h = sd.to_html("Что сделать.\n1. Первое\n2. Второе <5\n\nГотово когда & срок")
+    assert h == "<p>Что сделать.<br>1. Первое<br>2. Второе &lt;5</p><p>Готово когда &amp; срок</p>"
+    assert sd.to_html("<p>уже html</p>") == "<p>уже html</p>"
+    assert sd.build_note("1", "a\nb")["request_note"]["description"] == "<p>a<br>b</p>"
+    assert sd.build_create({}, "t", "s", "a\nb")["request"]["description"] == "<p>a<br>b</p>"
+
+
+def test_build_update_has_description_and_deadlines():
+    r = sd.build_update("x\ny", due="2026-11-30", start="2026-11-16")["request"]
+    assert r["description"] == "<p>x<br>y</p>" and set(r) == {"description", "due_by_time", "scheduled_start_time"}
+    assert r["due_by_time"]["value"].isdigit()
