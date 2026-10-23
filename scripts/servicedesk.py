@@ -5,7 +5,9 @@
                                      [--until ГГГГ-ММ-ДД] [--limit 200] [--page-size 100] [--criteria-json ФАЙЛ]
                                      [--with-people] [--with-attachments] [--json]
   python scripts/servicedesk.py create --template ПСЕВДОНИМ --subject "тема" [--description "текст"]
-                                       [--group ПСЕВДОНИМ] [--send]
+                                       [--group ПСЕВДОНИМ] [--technician ИМЯ] [--priority ИМЯ] [--check] [--send]
+  python scripts/servicedesk.py note --request НОМЕР --text "текст" [--send]
+  python scripts/servicedesk.py meta [--what templates|technicians|observed|all] [--name ЧАСТЬ_ИМЕНИ]
 
 Окружение (.env, не коммитить): SD_BASE_URL — адрес портала до /api/v3 (для облака вместе с /app/<портал>),
 SD_API_KEY — ключ из профиля пользователя SDP (раздел API Key generation), права ключа: чтение и создание заявок.
@@ -21,7 +23,10 @@ Zoho-oauthtoken ...), SD_CONFIG — путь к конфигу шаблонов 
     SD_ALLOW_HTTP=1), узел можно ограничить SD_ALLOWED_HOSTS, перенаправление на другой узел отклоняется;
   * подтверждение отправки защищает от случайного запуска, но не является механизмом авторизации: процесс с терминалом
     и доступом к окружению его автоматизирует. Для строгого разделения выдайте ключу только нужные права.
-Списки шаблонов и групп обычный ключ часто не читает (403, 404), поэтому имена шаблонов и групп берутся из конфига.
+Списки групп, приоритетов и категорий обычный ключ часто не читает (403, 404), поэтому их имена берутся из конфига и
+сверяются по фактам: `meta observed` показывает группы и приоритеты, реально стоящие в последних заявках. Шаблоны и
+техники читаются (`meta templates`, `meta technicians`), `create --check` сверяет по ним шаблон и исполнителя до отправки.
+Заметка к заявке (`note`) работает как создание: сухой прогон, отправка только с `--send` и ручным подтверждением.
 """
 from __future__ import annotations
 
@@ -216,6 +221,87 @@ def shape(req: dict, people: bool = False, attachments: bool = False) -> dict:
     return {k: v for k, v in out.items() if v is not None}
 
 
+def fetch_templates(client: SDClient, page_size: int = 100, max_pages: int = 20) -> list:
+    """Все шаблоны заявок постранично (сервер отдаёт не больше 100 за страницу)."""
+    out, start = [], 1
+    for _ in range(max_pages):
+        d = client.get("requests/template", {"list_info": {"row_count": page_size, "start_index": start}})
+        rows = d.get("template") or []
+        out += rows
+        if not (d.get("list_info") or {}).get("has_more_rows") or not rows:
+            return out
+        start += len(rows)
+    raise SDError("список шаблонов прочитан не полностью (достигнут предел страниц)")
+
+
+def fetch_technicians(client: SDClient, name: str | None = None, page_size: int = 100, max_pages: int = 10) -> list:
+    """Пользователи-техники (is_technician is True) по части имени. Сервер не фильтрует по is_technician (проверено на
+    портале), поэтому список всех пользователей слишком велик: ищем по имени (`contains`), роль проверяем на клиенте."""
+    out, start = [], 1
+    for _ in range(max_pages):
+        li = {"row_count": page_size, "start_index": start}
+        if name:
+            li["search_criteria"] = [{"field": "name", "condition": "contains", "value": name}]
+        d = client.get("users", {"list_info": li})
+        rows = d.get("users") or []
+        out += [{"name": u.get("name"), "id": u.get("id")} for u in rows if u.get("is_technician") is True]
+        if not (d.get("list_info") or {}).get("has_more_rows") or not rows:
+            return out
+        start += len(rows)
+    raise SDError("список техников прочитан не полностью (достигнут предел страниц)")
+
+
+def observed_values(client: SDClient, limit: int = 200) -> dict:
+    """Группы, приоритеты и шаблоны, реально стоящие в последних заявках: справочники групп и приоритетов API не отдаёт."""
+    rows = fetch_requests(client, limit=limit)
+    res = {"groups": {}, "priorities": {}}
+    for r in rows:
+        for key, fld in (("groups", "group"), ("priorities", "priority")):
+            n = _name(r.get(fld))
+            if n:
+                res[key][n] = res[key].get(n, 0) + 1
+    return res
+
+
+def check_create(client: SDClient, payload: dict, cfg: dict | None = None) -> list:
+    """Проверка тела создания по фактам портала (только чтение). Возвращает список проблем, пусто значит замечаний нет."""
+    req, problems = payload.get("request") or {}, []
+    tpl = req.get("template") or {}
+    try:
+        tpls = fetch_templates(client)
+        names = {t.get("name") for t in tpls}
+        ids = {str(t.get("id")) for t in tpls}
+        if tpl.get("id") is not None and str(tpl["id"]) not in ids:
+            problems.append(f'шаблон id={tpl["id"]} не найден в портале')
+        if tpl.get("name") is not None and tpl["name"] not in names:
+            problems.append(f'шаблон "{tpl["name"]}" не найден в портале (имя должно совпадать точно)')
+    except SDError as e:
+        problems.append(f"шаблоны проверить не удалось: {e}")
+    tech = (req.get("technician") or {}).get("name")
+    if tech:
+        try:
+            techs = {t["name"] for t in fetch_technicians(client, tech.split()[0])}
+            if tech not in techs:
+                near = sorted(n for n in techs if n.lower().startswith(tech.lower()))[:3]
+                problems.append(f'техник "{tech}" не найден среди техников портала (имя пишется полностью, как в портале)'
+                                + (f", похожие: {', '.join(near)}" if near else ""))
+        except SDError as e:
+            problems.append(f"техников проверить не удалось: {e}")
+    grp = (req.get("group") or {}).get("name")
+    try:
+        if grp and not fetch_requests(client, limit=1, group=grp):
+            problems.append(f'группа "{grp}" не найдена: нет ни одной заявки с такой группой (справочник групп API не отдаёт), проверьте имя')
+    except SDError as e:
+        problems.append(f"группу проверить не удалось: {e}")
+    prio = (req.get("priority") or {}).get("name")
+    try:
+        if prio and prio not in observed_values(client)["priorities"]:
+            problems.append(f'приоритет "{prio}" не встречается в последних заявках (справочник API недоступен): проверьте имя вручную')
+    except SDError as e:
+        problems.append(f"приоритет проверить не удалось: {e}")
+    return problems
+
+
 def load_config(path: str | None = None) -> dict:
     p = Path(path or os.environ.get("SD_CONFIG") or ROOT / "config" / "servicedesk.toml")
     if not p.is_file():
@@ -224,25 +310,38 @@ def load_config(path: str | None = None) -> dict:
     return tomllib.loads(p.read_text(encoding="utf-8"))
 
 
-def build_create(cfg: dict, template: str, subject: str, description: str = "", group: str | None = None) -> dict:
-    """Тело запроса создания заявки по шаблону. Имена шаблона и группы берутся из конфига (псевдоним) или как есть."""
+def build_create(cfg: dict, template: str, subject: str, description: str = "", group: str | None = None,
+                 technician: str | None = None, priority: str | None = None) -> dict:
+    """Тело запроса создания заявки по шаблону. Шаблон, группа и техник берутся из конфига (псевдоним) или как есть.
+    Значение шаблона в конфиге: строка это имя, целое число это id. Техник по умолчанию: [defaults] technician."""
     tpl = (cfg.get("templates") or {}).get(template, template)
-    req = {"subject": subject, "template": {"name": tpl}}
+    req = {"subject": subject, "template": {"id": str(tpl)} if isinstance(tpl, int) else {"name": tpl}}
     if description:
         req["description"] = description
     if group:
         req["group"] = {"name": (cfg.get("groups") or {}).get(group, group)}
+    tech = technician or (cfg.get("defaults") or {}).get("technician")
+    if tech:
+        req["technician"] = {"name": (cfg.get("technicians") or {}).get(tech, tech)}
+    prio = priority or (cfg.get("defaults") or {}).get("priority")
+    if prio:
+        req["priority"] = {"name": prio}
     return {"request": req}
 
 
-def confirm_send(payload: dict, isatty=None, ask=input) -> bool:
+def build_note(request_id: str, text: str, show_to_requester: bool = False) -> dict:
+    """Тело заметки к заявке. По умолчанию заметка внутренняя (заявителю не показывается, уведомлений нет)."""
+    return {"request_note": {"description": text, "show_to_requester": show_to_requester, "notify_technician": False}}
+
+
+def confirm_send(payload: dict, isatty=None, ask=input, what: str = "заявку") -> bool:
     """Ручное подтверждение отправки: только из интерактивного терминала, строка `отправить`."""
     if not (isatty() if isatty else sys.stdin.isatty()):
         print("Отправка требует ручного подтверждения в интерактивном терминале. Выполните команду сами "
               "(в сессии агента с префиксом `! `), агент подтвердить за вас не может.", file=sys.stderr)
         return False
     print(json.dumps(payload, ensure_ascii=False, indent=1))
-    return ask("Создать заявку с этим телом? Введите слово 'отправить': ").strip().lower() == "отправить"
+    return ask(f"Отправить {what} с этим телом? Введите слово 'отправить': ").strip().lower() == "отправить"
 
 
 def load_extra_criteria(path: str | None) -> list:
@@ -282,12 +381,77 @@ def main(argv=None, client: SDClient | None = None) -> int:
     cr.add_argument("--subject", required=True)
     cr.add_argument("--description", default="")
     cr.add_argument("--group")
+    cr.add_argument("--technician", help="имя техника или псевдоним из [technicians]; по умолчанию [defaults] technician")
+    cr.add_argument("--priority", help="имя приоритета; по умолчанию [defaults] priority")
+    cr.add_argument("--check", action="store_true", help="до отправки сверить шаблон, техника, группу и приоритет по порталу (только чтение)")
     cr.add_argument("--send", action="store_true", help="отправить после ручного подтверждения")
     cr.add_argument("--config")
+    nt = sub.add_parser("note", help="добавить заметку к заявке (по умолчанию сухой прогон)")
+    nt.add_argument("--request", required=True, help="номер заявки (id)")
+    nt.add_argument("--text", required=True)
+    nt.add_argument("--visible-to-requester", action="store_true", help="показать заметку заявителю (по умолчанию внутренняя)")
+    nt.add_argument("--send", action="store_true", help="отправить после ручного подтверждения")
+    mt = sub.add_parser("meta", help="что реально есть в портале: шаблоны, техники, группы и приоритеты из последних заявок")
+    mt.add_argument("--what", choices=("templates", "technicians", "observed", "all"), default="all")
+    mt.add_argument("--name", help="часть имени для поиска техников (без неё список всех пользователей слишком велик)")
+    mt.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "meta":
+            c = client or make_client()
+            out = {}
+            if a.what in ("templates", "all"):
+                try:
+                    out["templates"] = [{"id": t.get("id"), "name": t.get("name")} for t in fetch_templates(c)]
+                except SDError as e:
+                    out["templates"] = f"недоступно: {e}"
+            if a.what == "technicians" or (a.what == "all" and a.name):
+                try:
+                    out["technicians"] = [t["name"] for t in fetch_technicians(c, a.name)] if a.name else \
+                        "укажите --name (часть имени): список всех пользователей портала слишком велик"
+                except SDError as e:
+                    out["technicians"] = f"недоступно: {e}"
+            if a.what in ("observed", "all"):
+                try:
+                    out["observed"] = observed_values(c)
+                except SDError as e:
+                    out["observed"] = f"недоступно: {e}"
+            if a.json:
+                print(json.dumps(out, ensure_ascii=False))
+            else:
+                for k, v in out.items():
+                    print(f"== {k}")
+                    if isinstance(v, str):
+                        print(v)
+                    elif isinstance(v, dict):
+                        for kk, vv in v.items():
+                            print(f"{kk}: " + ", ".join(f"{n} ({cnt})" for n, cnt in sorted(vv.items(), key=lambda x: -x[1])))
+                    else:
+                        for it in v:
+                            print(f'{it["id"]}\t{it["name"]}' if isinstance(it, dict) else it)
+            return 0
+        if a.cmd == "note":
+            payload = build_note(a.request, a.text, a.visible_to_requester)
+            if not a.send:
+                print("Сухой прогон, ничего не отправлено. Заметка к заявке " + str(a.request) + ", тело запроса:\n"
+                      + json.dumps(payload, ensure_ascii=False, indent=1))
+                return 0
+            if not confirm_send(payload, what=f"заметку к заявке {a.request}"):
+                print("Отправка отменена.")
+                return 1
+            (client or make_client()).post(f"requests/{urllib.parse.quote(str(a.request), safe='')}/notes", payload)
+            print(f"заметка добавлена к заявке {a.request}")
+            return 0
         if a.cmd == "create":
-            payload = build_create(load_config(a.config), a.template, a.subject, a.description, a.group)
+            payload = build_create(load_config(a.config), a.template, a.subject, a.description, a.group,
+                                   a.technician, a.priority)
+            if a.check:
+                problems = check_create(client or make_client(), payload)
+                for pr in problems:
+                    print("замечание: " + pr)
+                print("проверка по порталу: " + ("есть замечания" if problems else "замечаний нет"))
+                if problems and a.send:
+                    return 1
             if not a.send:
                 print("Сухой прогон, ничего не отправлено. Тело запроса:\n" + json.dumps(payload, ensure_ascii=False, indent=1))
                 return 0

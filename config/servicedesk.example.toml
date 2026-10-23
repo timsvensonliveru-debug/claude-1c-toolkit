@@ -6,3 +6,16 @@ access_request = "Точное имя шаблона заявки в ServiceDesk
 
 [groups]
 support = "Точное имя группы"
+
+# Значение шаблона: строка это имя, целое число это id шаблона.
+# [templates]
+# internal_work = 700
+#
+# Имя техника пишется полностью, как в портале (проверка: servicedesk.py meta --what technicians).
+# [technicians]
+# main = "Фамилия Имя Отчество"
+#
+# Назначение и приоритет по умолчанию, перекрываются --technician и --priority.
+# [defaults]
+# technician = "main"
+# priority = "Низкий"

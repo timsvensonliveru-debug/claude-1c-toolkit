@@ -161,3 +161,116 @@ def test_criteria_json_validation(tmp_path):
         sd.load_extra_criteria(str(f))
     with pytest.raises(sd.SDError):
         sd.load_extra_criteria(str(tmp_path / "нет.json"))
+
+
+TPL1 = json.dumps({"template": [{"id": "1", "name": "Шаблон А"}, {"id": "2", "name": "Шаблон Б"}], "list_info": {"has_more_rows": True}})
+TPL2 = json.dumps({"template": [{"id": "3", "name": "Шаблон В"}], "list_info": {"has_more_rows": False}})
+USERS = json.dumps({"users": [{"id": "10", "name": "Техник Один", "is_technician": True}], "list_info": {"has_more_rows": False}})
+REQS = json.dumps({"requests": [{"id": "1", "group": {"name": "Группа 1"}, "priority": {"name": "Низкий"}},
+                                {"id": "2", "group": {"name": "Группа 1"}, "priority": {"name": "Высокий"}}],
+                   "list_info": {"has_more_rows": False}})
+
+
+def test_fetch_templates_paginates():
+    t = Fake((200, TPL1), (200, TPL2))
+    rows = sd.fetch_templates(sd.SDClient("https://sd.example", "KEY", transport=t), page_size=2)
+    assert [r["id"] for r in rows] == ["1", "2", "3"]
+    assert li_of(t.calls[1][1])["start_index"] == 3
+
+
+def test_build_create_template_id_and_defaults():
+    cfg = {"templates": {"work": 700, "named": "Шаблон А"}, "technicians": {"main": "Техник Один"},
+           "defaults": {"technician": "main", "priority": "Низкий"}}
+    r = sd.build_create(cfg, "work", "тема")["request"]
+    assert r["template"] == {"id": "700"} and r["technician"] == {"name": "Техник Один"} and r["priority"] == {"name": "Низкий"}
+    r2 = sd.build_create(cfg, "named", "тема", technician="Другой", priority="Высокий")["request"]
+    assert r2["template"] == {"name": "Шаблон А"} and r2["technician"] == {"name": "Другой"} and r2["priority"]["name"] == "Высокий"
+    assert "technician" not in sd.build_create({}, "x", "т")["request"]
+
+
+def test_check_create_flags_unknown_by_facts():
+    good = {"request": {"template": {"name": "Шаблон Б"}, "technician": {"name": "Техник Один"},
+                        "group": {"name": "Группа 1"}, "priority": {"name": "Низкий"}}}
+    t = Fake((200, TPL1), (200, TPL2), (200, USERS), (200, REQS), (200, REQS))
+    assert sd.check_create(sd.SDClient("https://sd.example", "KEY", transport=t), good) == []
+    bad = {"request": {"template": {"name": "Нет такого"}, "technician": {"name": "Чужой"},
+                       "group": {"name": "Группа 9"}, "priority": {"name": "Срочный"}}}
+    t = Fake((200, TPL1), (200, TPL2), (200, USERS), (200, json.dumps({"requests": []})), (200, REQS))
+    p = sd.check_create(sd.SDClient("https://sd.example", "KEY", transport=t), bad)
+    assert len(p) == 4 and "Нет такого" in p[0]
+    # шаблон по id
+    t = Fake((200, TPL1), (200, TPL2), (200, REQS))
+    p = sd.check_create(sd.SDClient("https://sd.example", "KEY", transport=t), {"request": {"template": {"id": "99"}}})
+    assert p and "id=99" in p[0]
+
+
+def test_check_create_technicians_forbidden_is_a_warning_not_a_crash():
+    t = Fake((200, TPL2), (403, "{}"), (200, REQS))
+    p = sd.check_create(sd.SDClient("https://sd.example", "KEY", transport=t),
+                        {"request": {"template": {"name": "Шаблон В"}, "technician": {"name": "Техник Один"}}})
+    assert len(p) == 1 and "не удалось" in p[0]
+
+
+def test_note_dry_run_sends_nothing_and_default_internal(capsys):
+    t = Fake()
+    c = sd.SDClient("https://sd.example", "KEY", transport=t)
+    assert sd.main(["note", "--request", "5", "--text", "комментарий"], client=c) == 0
+    out = capsys.readouterr().out
+    assert "Сухой прогон" in out and '"show_to_requester": false' in out and t.calls == []
+
+
+def test_note_send_needs_interactive_confirmation(monkeypatch, capsys):
+    t = Fake((200, "{}"))
+    c = sd.SDClient("https://sd.example", "KEY", transport=t)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    assert sd.main(["note", "--request", "5", "--text", "x", "--send"], client=c) == 1
+    assert t.calls == []
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    orig = sd.confirm_send
+    monkeypatch.setattr(sd, "confirm_send", lambda payload, what="": orig(payload, ask=lambda _: "отправить", what=what))
+    assert sd.main(["note", "--request", "5", "--text", "x", "--send"], client=c) == 0
+    m, url, _, data = t.calls[0]
+    assert m == "POST" and url.endswith("/api/v3/requests/5/notes")
+
+
+def test_meta_observed_and_templates(capsys):
+    t = Fake((200, TPL2), (200, REQS))
+    c = sd.SDClient("https://sd.example", "KEY", transport=t)
+    assert sd.main(["meta", "--what", "templates"], client=c) == 0
+    assert "Шаблон В" in capsys.readouterr().out
+    assert sd.main(["meta", "--what", "observed", "--json"], client=c) == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["observed"]["groups"] == {"Группа 1": 2}
+
+
+def test_check_create_technician_hint_prefix():
+    users = json.dumps({"users": [{"id": "1", "name": "Фамилия Имя Отчество", "is_technician": True}], "list_info": {}})
+    t = Fake((200, TPL2), (200, users))
+    p = sd.check_create(sd.SDClient("https://sd.example", "KEY", transport=t),
+                        {"request": {"template": {"name": "Шаблон В"}, "technician": {"name": "Фамилия Имя"}}})
+    assert len(p) == 1 and "Фамилия Имя Отчество" in p[0]
+
+
+def test_check_create_403_and_truncation_become_findings_not_crash():
+    more = json.dumps({"template": [{"id": "1", "name": "А"}], "list_info": {"has_more_rows": True}})
+    t = Fake((200, more))
+    with pytest.raises(sd.SDError):
+        sd.fetch_templates(sd.SDClient("https://sd.example", "KEY", transport=t), page_size=1, max_pages=1)
+    t = Fake((403, "{}"), (403, "{}"), (403, "{}"))
+    p = sd.check_create(sd.SDClient("https://sd.example", "KEY", transport=t),
+                        {"request": {"template": {"name": "А"}, "group": {"name": "Г"}, "priority": {"name": "Низкий"}}})
+    assert len(p) == 3 and all("не удалось" in x for x in p)
+
+
+def test_fetch_technicians_only_explicit_true():
+    users = json.dumps({"users": [{"id": "1", "name": "Нет поля"}, {"id": "2", "name": "Техник", "is_technician": True},
+                                  {"id": "3", "name": "Не техник", "is_technician": False}], "list_info": {}})
+    t = Fake((200, users))
+    assert [x["name"] for x in sd.fetch_technicians(sd.SDClient("https://sd.example", "KEY", transport=t))] == ["Техник"]
+
+
+def test_meta_403_reports_unavailable(capsys):
+    t = Fake((403, "{}"), (403, "{}"))
+    assert sd.main(["meta", "--what", "all", "--json"], client=sd.SDClient("https://sd.example", "KEY", transport=t)) == 0
+    d = json.loads(capsys.readouterr().out)
+    assert set(d) == {"templates", "observed"} and all(str(v).startswith("недоступно") for v in d.values())
