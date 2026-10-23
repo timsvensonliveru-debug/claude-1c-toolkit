@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-23
+
 ### Added
 - `scripts/bsl_ls_top.py` и вызов из PostToolUse-хука: необязательный прогон BSL LS с показом девяти частых ключей SonarQube; без jar или java молчит, отключение `AI_TOOLKIT_BSLLS_GATE=off`.
 - Confluence: `atlassian.py conf publish` сам превращает названия страниц в кавычках или жирным в ссылки (`scripts/confluence_linkify.py`, отключить `--no-linkify`), печатает подсказку `СТРУКТУРА`, когда в разделе накопилось 8 и больше разнородных страниц, и команда `conf structure <id>` (`scripts/structure_check.py`). Правило про кликабельные ссылки и группировку в `core/AGENTS.md` и скилле аналитика.
