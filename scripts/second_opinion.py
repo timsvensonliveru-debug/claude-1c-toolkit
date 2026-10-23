@@ -58,6 +58,28 @@ REVIEW_PROMPT = ("Ты ревьюер кода. Часть {part} диффа р�
 NOTRAIN_MODEL = os.environ.get("AI_TOOLKIT_NOTRAIN_MODEL", "openai/gpt-4.1-mini")
 
 
+for _s in (sys.stdout, sys.stderr):                  # Windows: консоль и канал не в UTF-8 по умолчанию
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+
+def utf8_env() -> dict:
+    """Окружение дочерних процессов: Python внутри них читает и пишет UTF-8 независимо от локали Windows (cp1251, cp866)."""
+    return dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+
+
+def read_stdin_utf8() -> str:
+    """Текст из STDIN как UTF-8 (байты, а не локаль): вопрос на кириллице не превращается в мусор на Windows."""
+    raw = sys.stdin.buffer.read()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        import locale
+        return raw.decode(locale.getpreferredencoding(False), errors="replace")
+
+
 # ---------- звенья цепочки: каждое возвращает текст или None (звено недоступно) ----------
 
 def codex_exec(args: list, cwd: Path, stdin: str | None = None) -> str | None:
@@ -65,7 +87,8 @@ def codex_exec(args: list, cwd: Path, stdin: str | None = None) -> str | None:
     if not exe:
         return None
     try:
-        r = subprocess.run([exe, *args], cwd=cwd, input=stdin, capture_output=True, text=True, timeout=TIMEOUT)
+        r = subprocess.run([exe, *args], cwd=cwd, input=stdin, capture_output=True, text=True, timeout=TIMEOUT,
+                           encoding="utf-8", errors="replace", env=utf8_env())
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"⚠ Codex: {e}", flush=True)
         return None
@@ -95,17 +118,18 @@ def copilot(prompt: str, files=()) -> str | None:
     cmd = copilot_cmd()
     if not cmd:
         return None
-    cmd += "".join(" --file " + shlex.quote(str(f)) for f in files)     # вложения читаются целиком, лимит запроса не мешает
+    quote = (lambda f: subprocess.list2cmdline([str(f)])) if os.name == "nt" else (lambda f: shlex.quote(str(f)))
+    cmd += "".join(" --file " + quote(f) for f in files)     # вложения читаются целиком, лимит запроса не мешает
     try:
         # команду задаёт сам человек; оболочка разбирает кавычки и на Windows. По таймауту гасим всю группу
         grp = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
         proc = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, **grp)
+                                stderr=subprocess.PIPE, env=utf8_env(), **grp)       # байты: кодировку задаём сами
     except OSError as e:
         print(f"⚠ Copilot: {e}", flush=True)
         return None
     try:
-        out, _ = proc.communicate(prompt, timeout=900)
+        out, _ = proc.communicate(prompt.encode("utf-8"), timeout=900)
     except subprocess.TimeoutExpired:
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
@@ -123,7 +147,8 @@ def copilot(prompt: str, files=()) -> str | None:
                     pipe.close()
         print("⚠ Copilot: таймаут", flush=True)
         return None
-    return out if proc.returncode == 0 and out.strip() else None
+    text = (out or b"").decode("utf-8", errors="replace")
+    return text if proc.returncode == 0 and text.strip() else None
 
 
 def notrain(prompt: str, files=()) -> str | None:
@@ -168,7 +193,8 @@ def split_diff(diff: str, limit: int = CHUNK) -> list:
 
 
 def _git(repo: Path, *args) -> str:
-    r = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True)
+    r = subprocess.run(["git", "-c", "core.quotepath=false", *args], cwd=repo, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise RuntimeError(f"git {args[0]}: {(r.stderr or r.stdout).strip()[:200]}")
     return r.stdout
@@ -279,12 +305,38 @@ def ask(prompt: str, chain=TEXT_CHAIN, codex=codex_exec, files=(), risk: str = "
     return "", ""
 
 
-def status() -> int:
+def copilot_why_not() -> str:
+    """Почему встроенный адаптер Copilot не считается настроенным (пусто, если настроен)."""
+    if os.environ.get("AI_TOOLKIT_COPILOT_CMD", "").strip():
+        return ""
+    if not ADAPTER.is_file():
+        return "нет scripts/copilot_adapter.py"
+    if not shutil.which("uv"):
+        return "не найден uv (https://astral.sh/uv)"
+    if not (COPILOT_PROFILE.is_dir() and any(COPILOT_PROFILE.iterdir())):
+        return "вход не выполнен (python scripts/copilot_setup.py --login)"
+    return ""
+
+
+def probe_copilot() -> tuple[bool, str]:
+    """Живая проба: короткий вопрос на кириллице. Проверяет и вход, и кодировку (в ответе должно быть слово)."""
+    ans = copilot("Повтори одним словом, строчными буквами, без других слов: проверка")
+    if ans is None:
+        return False, "Copilot не ответил (вход, сеть, селекторы страницы)"
+    if "проверка" not in ans.casefold():
+        return False, f"ответ не похож на ожидаемый, возможна проблема кодировки: {ans.strip()[:80]!r}"
+    return True, "ответил, кириллица доходит"
+
+
+def status(probe: bool = False) -> int:
     print("Codex CLI:", "есть" if shutil.which("codex") else "нет (scripts/codex_setup.py)")
     cmd = copilot_cmd()
     print("M365 Copilot (по умолчанию) или иной ассистент:",
-          ("настроен" + (" (своя команда)" if os.environ.get("AI_TOOLKIT_COPILOT_CMD") else " (встроенный адаптер)")) if cmd
-          else "не настроен (вход: python scripts/copilot_setup.py --login)")
+          ("настроен" + (" (своя команда)" if os.environ.get("AI_TOOLKIT_COPILOT_CMD") else " (встроенный адаптер, вход выполнен)")) if cmd
+          else f"не настроен: {copilot_why_not()}")
+    if probe:
+        ok, msg = probe_copilot() if cmd else (False, "пробу нечем делать")
+        print(f"Проба Copilot: {'ok' if ok else 'НЕ ПРОЙДЕНА'}, {msg}")
     print("Модель без обучения:", "включена" if os.environ.get("OPENROUTER_API_KEY")
           and os.environ.get("AI_TOOLKIT_NOTRAIN") == "1" else "выключена (OPENROUTER_API_KEY + AI_TOOLKIT_NOTRAIN=1)")
     return 0
@@ -311,10 +363,11 @@ def main(argv=None) -> int:
     for sp in (rv, ak):
         sp.add_argument("--risk", choices=["critical", "normal", "low"], default="normal",
                         help="critical: Codex первым; normal: ассистент первым, Codex резервом; low: без Codex")
-    sub.add_parser("status")
+    st = sub.add_parser("status")
+    st.add_argument("--probe", action="store_true", help="живая проба Copilot коротким вопросом (вход и кодировка)")
     a = ap.parse_args(argv)
     if a.cmd == "status":
-        return status()
+        return status(a.probe)
     if a.cmd == "review":
         try:
             who, body = review(a.repo.resolve(), a.base, a.commit, risk=a.risk)
@@ -322,7 +375,7 @@ def main(argv=None) -> int:
             print(f"Второе мнение недоступно: {e}")
             return 2
     else:
-        who, body = ask(sys.stdin.read() if a.text == "-" else a.text, files=a.file, risk=a.risk)
+        who, body = ask(read_stdin_utf8() if a.text == "-" else a.text, files=a.file, risk=a.risk)
     if not who:
         print(f"Второе мнение недоступно: {body or 'ни одно звено цепочки не ответило, проверь `status`'}. Готовым не считать.")
         return 2

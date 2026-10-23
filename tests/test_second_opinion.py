@@ -189,3 +189,68 @@ if __name__ == "__main__":
     test_collect_diff_sees_worktree_and_merge()
     test_codex_setup_respects_opt_out()
     print("OK: second_opinion")
+
+
+def test_copilot_roundtrip_utf8_even_under_cp1251_locale(monkeypatch, tmp_path):
+    """Windows с русской локалью: вопрос и ответ идут байтами UTF-8, а не в cp1251 (инцидент «модель смотрела мусор»)."""
+    child = tmp_path / "echo_child.py"
+    child.write_text("import sys\nd = sys.stdin.buffer.read()\nsys.stdout.buffer.write(d)\n", encoding="utf-8")
+    # локаль дочернего процесса притворяется cp1251: без явного UTF-8 текст не пережил бы поездку
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1251")
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    monkeypatch.setenv("AI_TOOLKIT_COPILOT_CMD", f'"{sys.executable}" "{child}"')
+    prompt = "Проверь функцию КоличествоСтрок: русский текст и 🙂 не должны ломаться"
+    assert so.copilot(prompt) == prompt
+
+
+def test_utf8_env_forces_python_utf8():
+    env = so.utf8_env()
+    assert env["PYTHONUTF8"] == "1" and env["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_read_stdin_utf8_reads_bytes_not_locale(monkeypatch):
+    import io
+
+    class FakeStdin:
+        buffer = io.BytesIO("Вопрос на кириллице".encode("utf-8"))
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+    assert so.read_stdin_utf8() == "Вопрос на кириллице"
+
+
+def test_adapter_reads_stdin_as_utf8(monkeypatch):
+    import io
+    import copilot_adapter as ca
+
+    class FakeStdin:
+        buffer = io.BytesIO("Проверка".encode("utf-8"))
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+    assert ca.read_stdin_utf8() == "Проверка"
+
+
+def test_status_reports_reason_and_probe(monkeypatch, capsys, tmp_path):
+    monkeypatch.delenv("AI_TOOLKIT_COPILOT_CMD", raising=False)
+    monkeypatch.setattr(so, "COPILOT_PROFILE", tmp_path / "нет_профиля")
+    so.status()
+    out = capsys.readouterr().out
+    assert "не настроен" in out and ("вход не выполнен" in out or "uv" in out)
+    # проба: ответ с нужным словом проходит, мусор нет
+    monkeypatch.setenv("AI_TOOLKIT_COPILOT_CMD", "x")
+    monkeypatch.setattr(so, "copilot", lambda prompt, files=(): "проверка")
+    assert so.probe_copilot()[0] is True
+    monkeypatch.setattr(so, "copilot", lambda prompt, files=(): "РїСЂРѕРІРµСЂРєР°")
+    ok, msg = so.probe_copilot()
+    assert ok is False and "кодировк" in msg
+    monkeypatch.setattr(so, "copilot", lambda prompt, files=(): None)
+    assert so.probe_copilot()[0] is False
+
+
+def test_git_diff_is_decoded_as_utf8(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    f = tmp_path / "м.bsl"
+    f.write_text("Процедура Тест()\nКонецПроцедуры\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"], check=True)
+    f.write_text("Процедура Тест2()\nКонецПроцедуры\n", encoding="utf-8")
+    d = so.collect_diff(tmp_path, "HEAD", None)
+    assert "Процедура Тест2" in d and "м.bsl" in d

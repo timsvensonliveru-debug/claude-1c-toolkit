@@ -66,6 +66,16 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 
+def read_stdin_utf8() -> str:
+    """Вопрос со STDIN как UTF-8 (байты): на Windows locale-декодирование (cp1251, cp866) превращает кириллицу в мусор."""
+    raw = sys.stdin.buffer.read()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        import locale
+        return raw.decode(locale.getpreferredencoding(False), errors="replace")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Чистое ядро (без Playwright) — tests/test_copilot_delegate.py
 # ─────────────────────────────────────────────────────────────────────────────
@@ -373,7 +383,7 @@ def main():
     if a.login:
         return do_login()
     if a.prompt == "-":
-        a.prompt = sys.stdin.read()
+        a.prompt = read_stdin_utf8()
     if not a.prompt:
         ap.error("нужен текст вопроса (или - для STDIN) либо --login")
 
