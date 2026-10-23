@@ -407,6 +407,12 @@ def claim_approval(approval_id: str) -> Path:
     return mark
 
 
+def _definitely_rejected(e: BaseException) -> bool:
+    """Решение возвращаем только при доказанном отказе портала (HTTP 4xx). Таймаут, обрыв и 5xx дают неопределённый
+    исход: заявка могла создаться, решение остаётся погашенным, результат сверяют по порталу."""
+    return isinstance(e, SDError) and str(e).startswith("HTTP 4")
+
+
 def release_claim(mark: Path) -> None:
     """Отправка не состоялась (ошибка до создания): вернуть решение, чтобы можно было повторить."""
     try:
@@ -426,7 +432,7 @@ class _SendLock:
     def __enter__(self):
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            if self.path.exists() and time.time() - self.path.stat().st_mtime > 600:
+            if self.path.exists() and time.time() - self.path.stat().st_mtime > 3600:
                 self.path.unlink()
             with open(self.path, "x", encoding="utf-8") as f:
                 f.write(self.token)
@@ -596,8 +602,8 @@ def main(argv=None, client: SDClient | None = None) -> int:
             mark = claim_approval(dec["id"]) if isinstance(dec, dict) else None
             try:
                 (client or make_client()).post(target, payload)
-            except BaseException:
-                if mark:
+            except BaseException as e:
+                if mark and _definitely_rejected(e):
                     release_claim(mark)
                 raise
             print(f"заметка добавлена к заявке {a.request}")
@@ -631,8 +637,8 @@ def main(argv=None, client: SDClient | None = None) -> int:
                 mark = claim_approval(dec["id"]) if isinstance(dec, dict) else None
                 try:
                     res = c.post("requests", payload)
-                except BaseException:
-                    if mark:
+                except BaseException as e:
+                    if mark and _definitely_rejected(e):
                         release_claim(mark)
                     raise
             r = res.get("request") or {}

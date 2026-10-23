@@ -193,17 +193,23 @@ def test_decision_for_note_is_bound_to_request_id(tmp_path, monkeypatch):
     assert t.calls[0][1].endswith("/requests/5/notes")
 
 
-def test_failed_post_releases_decision_for_retry(tmp_path, monkeypatch):
+def test_rejected_post_releases_decision_but_ambiguous_failure_does_not(tmp_path, monkeypatch):
     monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "ledger"))
     monkeypatch.setenv("SD_AGENT_SEND", "1")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     payload = sd.build_create({}, "Т", "С", requester_id="1")
     f = make_decision(tmp_path, payload)
-    t = Fake((200, NOREQ), (500, "{}"), (200, NOREQ), (200, CREATED), (200, read_back(requester={"id": "1"})))
-    c = sd.SDClient("https://sd.example", "K", transport=t)
     args = ["create", "--template", "Т", "--subject", "С", "--requester-id", "1", "--send", "--approve-file", str(f)]
+    t = Fake((200, NOREQ), (400, "{}"), (200, NOREQ), (200, CREATED), (200, read_back(requester={"id": "1"})))
+    c = sd.SDClient("https://sd.example", "K", transport=t)
     assert sd.main(args, client=c) == 2
     assert sd.main(args, client=c) == 0
+    f2 = make_decision(tmp_path, sd.build_create({}, "Т", "С2", requester_id="1"), name="d2.json")
+    args2 = ["create", "--template", "Т", "--subject", "С2", "--requester-id", "1", "--send", "--approve-file", str(f2)]
+    t2 = Fake((200, NOREQ), (500, "{}"), (200, NOREQ))
+    c2 = sd.SDClient("https://sd.example", "K", transport=t2)
+    assert sd.main(args2, client=c2) == 2
+    assert sd.main(args2, client=c2) == 2 and len(t2.calls) == 3      # второй раз: дубль-проверка прошла, решение погашено
 
 
 def test_parallel_send_lock_blocks_second_run(tmp_path, monkeypatch):
