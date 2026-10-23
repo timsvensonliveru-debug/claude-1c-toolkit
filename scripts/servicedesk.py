@@ -6,6 +6,7 @@
                                      [--with-people] [--with-attachments] [--json]
   python scripts/servicedesk.py create --template ПСЕВДОНИМ --subject "тема" [--description "текст"]
                                        [--group ПСЕВДОНИМ] [--technician ИМЯ] [--priority ИМЯ] [--check] [--send]
+  (отправка без терминала: --approve-file РЕШЕНИЕ.json, см. docs/SERVICEDESK.md)
   python scripts/servicedesk.py note --request НОМЕР --text "текст" [--send]
   python scripts/servicedesk.py meta [--what templates|technicians|observed|all] [--name ЧАСТЬ_ИМЕНИ]
 
@@ -32,9 +33,14 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import math
 import os
+import re
 import sys
+import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -311,7 +317,7 @@ def load_config(path: str | None = None) -> dict:
 
 
 def build_create(cfg: dict, template: str, subject: str, description: str = "", group: str | None = None,
-                 technician: str | None = None, priority: str | None = None) -> dict:
+                 technician: str | None = None, priority: str | None = None, requester_id: str | None = None) -> dict:
     """Тело запроса создания заявки по шаблону. Шаблон, группа и техник берутся из конфига (псевдоним) или как есть.
     Значение шаблона в конфиге: строка это имя, целое число это id. Техник по умолчанию: [defaults] technician."""
     tpl = (cfg.get("templates") or {}).get(template, template)
@@ -326,6 +332,9 @@ def build_create(cfg: dict, template: str, subject: str, description: str = "", 
     prio = priority or (cfg.get("defaults") or {}).get("priority")
     if prio:
         req["priority"] = {"name": prio}
+    rid = requester_id or (cfg.get("defaults") or {}).get("requester_id")
+    if rid:
+        req["requester"] = {"id": str(rid)}
     return {"request": req}
 
 
@@ -342,6 +351,136 @@ def confirm_send(payload: dict, isatty=None, ask=input, what: str = "заявк�
         return False
     print(json.dumps(payload, ensure_ascii=False, indent=1))
     return ask(f"Отправить {what} с этим телом? Введите слово 'отправить': ").strip().lower() == "отправить"
+
+
+APPROVAL_TTL = 7200
+
+
+def payload_digest(payload: dict, target: str = "requests") -> str:
+    """sha256 цели и тела: решение для заметки к одной заявке не подходит к другой заявке."""
+    return hashlib.sha256(json.dumps({"target": target, "body": payload}, ensure_ascii=False, sort_keys=True)
+                          .encode("utf-8")).hexdigest()
+
+
+def ledger_dir() -> Path:
+    """Каталог меток использованных решений и блокировок (по метке на решение, создаётся атомарно)."""
+    return Path(os.environ.get("SD_APPROVAL_LEDGER") or Path.home() / ".cache" / "ai_toolkit_sd_approvals")
+
+
+def _no_const(x):
+    raise ValueError(x)
+
+
+def check_approval(path: str, payload: dict, target: str = "requests", now: float | None = None) -> dict:
+    """Решение человека файлом для среды без терминала. Привязано к цели и телу (sha256), живёт APPROVAL_TTL секунд,
+    у каждого решения свой approval_id, одноразовое (см. claim_approval). Включается только SD_AGENT_SEND=1."""
+    if os.environ.get("SD_AGENT_SEND") != "1":
+        raise SDError("отправка по файлу решения выключена: человек включает её переменной SD_AGENT_SEND=1 в окружении")
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"), parse_constant=_no_const)
+    except (OSError, ValueError):
+        raise SDError("файл решения не прочитан или не JSON") from None
+    who, at, dg, aid = d.get("approved_by"), d.get("approved_at"), d.get("payload_sha256"), d.get("approval_id")
+    if (not isinstance(who, str) or not who.strip() or isinstance(at, bool) or not isinstance(at, (int, float))
+            or not math.isfinite(at) or not isinstance(dg, str) or not isinstance(aid, str) or not re.fullmatch(r"[0-9a-f]{32}", aid)):
+        raise SDError("файл решения: нужны approved_by (кто решил), approved_at (секунды epoch), payload_sha256 и approval_id")
+    if dg != payload_digest(payload, target):
+        raise SDError("файл решения относится к другой цели или телу запроса (sha256 не совпал): пересоздайте решение для этой заявки")
+    t = time.time() if now is None else now
+    if t - at > APPROVAL_TTL or at > t + 60:
+        raise SDError(f"файл решения просрочен (живёт {APPROVAL_TTL // 60} минут) или время в будущем")
+    return {"by": who.strip(), "id": aid}
+
+
+def claim_approval(approval_id: str) -> Path:
+    """Атомарно погасить решение до отправки: создание метки эксклюзивное, второй процесс получит отказ."""
+    d = ledger_dir()
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        mark = d / f"approved-{approval_id}"
+        with open(mark, "x", encoding="utf-8") as f:
+            f.write(str(int(time.time())))
+    except FileExistsError:
+        raise SDError("это решение уже использовано (одноразовое)") from None
+    except OSError:
+        raise SDError("журнал решений недоступен для записи: без него одноразовость не гарантируется, отправка отменена") from None
+    return mark
+
+
+def release_claim(mark: Path) -> None:
+    """Отправка не состоялась (ошибка до создания): вернуть решение, чтобы можно было повторить."""
+    try:
+        mark.unlink()
+    except OSError:
+        pass
+
+
+class _SendLock:
+    """Блокировка на пару заявитель и тема от проверки дубля до конца POST: два параллельных запуска не создадут два дубля."""
+    def __init__(self, payload: dict):
+        req = payload.get("request") or {}
+        key = json.dumps([(req.get("requester") or {}).get("id"), req.get("subject")], ensure_ascii=False)
+        self.path = ledger_dir() / ("lock-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24])
+        self.token = uuid.uuid4().hex
+
+    def __enter__(self):
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self.path.exists() and time.time() - self.path.stat().st_mtime > 600:
+                self.path.unlink()
+            with open(self.path, "x", encoding="utf-8") as f:
+                f.write(self.token)
+        except FileExistsError:
+            raise SDError("такая же заявка отправляется прямо сейчас другим запуском") from None
+        except OSError:
+            raise SDError("каталог блокировок недоступен для записи, отправка отменена") from None
+        return self
+
+    def __exit__(self, *a):
+        try:
+            if self.path.read_text(encoding="utf-8") == self.token:     # чужую (после устаревания) не удаляем
+                self.path.unlink()
+        except OSError:
+            pass
+
+
+def authorize_send(payload: dict, approve_file: str | None, what: str = "заявку", target: str = "requests"):
+    """Интерактивное подтверждение человека (возвращает True) либо файл решения (возвращает решение), иначе False."""
+    if approve_file:
+        dec = check_approval(approve_file, payload, target)
+        print(f"решение принято от: {dec['by']}")
+        return dec
+    return confirm_send(payload, what=what)
+
+
+def find_duplicate(client: SDClient, payload: dict, window: int = 3600, now: float | None = None) -> dict | None:
+    """Заявка с той же темой и тем же заявителем за последний час: повтор POST создал бы дубль."""
+    req = payload.get("request") or {}
+    since_ms = str(int(((time.time() if now is None else now) - window) * 1000))
+    rows = fetch_requests(client, limit=5000, extra=[crit("created_time", since_ms, "greater than")])
+    rid = (req.get("requester") or {}).get("id")
+    for r in rows:
+        if r.get("subject") != req.get("subject"):
+            continue
+        if rid and str((r.get("requester") or {}).get("id")) != str(rid):
+            continue
+        return r
+    return None
+
+
+def readback(client: SDClient, request_id: str, payload: dict) -> list:
+    """Прочитать созданную заявку и сравнить с тем, что просили. Возвращает расхождения."""
+    got = client.get(f"requests/{urllib.parse.quote(str(request_id), safe='')}").get("request") or {}
+    req, diffs = payload.get("request") or {}, []
+    for fld in ("template", "group", "priority", "technician", "requester"):
+        want = req.get(fld) or {}
+        have = got.get(fld) or {}
+        for k in ("id", "name"):
+            if want.get(k) is not None and str(have.get(k)) != str(want[k]):
+                diffs.append(f"{fld}.{k}: просили {want[k]}, в портале {have.get(k)}")
+    if got.get("subject") != req.get("subject"):
+        diffs.append("тема в портале отличается от запрошенной")
+    return diffs
 
 
 def load_extra_criteria(path: str | None) -> list:
@@ -384,19 +523,32 @@ def main(argv=None, client: SDClient | None = None) -> int:
     cr.add_argument("--technician", help="имя техника или псевдоним из [technicians]; по умолчанию [defaults] technician")
     cr.add_argument("--priority", help="имя приоритета; по умолчанию [defaults] priority")
     cr.add_argument("--check", action="store_true", help="до отправки сверить шаблон, техника, группу и приоритет по порталу (только чтение)")
+    cr.add_argument("--requester-id", help="id заявителя (структурой, не именем); по умолчанию [defaults] requester_id")
+    cr.add_argument("--approve-file", help="файл решения человека вместо ввода в терминале (нужен SD_AGENT_SEND=1)")
+    cr.add_argument("--allow-duplicate", action="store_true", help="не останавливаться на заявке с той же темой за последний час")
     cr.add_argument("--send", action="store_true", help="отправить после ручного подтверждения")
     cr.add_argument("--config")
     nt = sub.add_parser("note", help="добавить заметку к заявке (по умолчанию сухой прогон)")
     nt.add_argument("--request", required=True, help="номер заявки (id)")
     nt.add_argument("--text", required=True)
     nt.add_argument("--visible-to-requester", action="store_true", help="показать заметку заявителю (по умолчанию внутренняя)")
+    nt.add_argument("--approve-file", help="файл решения человека вместо ввода в терминале (нужен SD_AGENT_SEND=1)")
     nt.add_argument("--send", action="store_true", help="отправить после ручного подтверждения")
+    ap_ = sub.add_parser("approve", help="записать решение человека для отправки без терминала (привязано к sha256 тела, живёт 2 часа)")
+    ap_.add_argument("--digest", required=True, help="sha256 цели и тела из сухого прогона")
+    ap_.add_argument("--by", required=True, help="кто принял решение")
+    ap_.add_argument("--out", required=True)
     mt = sub.add_parser("meta", help="что реально есть в портале: шаблоны, техники, группы и приоритеты из последних заявок")
     mt.add_argument("--what", choices=("templates", "technicians", "observed", "all"), default="all")
     mt.add_argument("--name", help="часть имени для поиска техников (без неё список всех пользователей слишком велик)")
     mt.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "approve":
+            Path(a.out).write_text(json.dumps({"approved_by": a.by, "approved_at": int(time.time()), "payload_sha256": a.digest,
+                                               "approval_id": uuid.uuid4().hex}), encoding="utf-8")
+            print(f"решение записано в {a.out}: действует {APPROVAL_TTL // 60} минут, одно использование, только для тела с этим sha256")
+            return 0
         if a.cmd == "meta":
             c = client or make_client()
             out = {}
@@ -432,19 +584,27 @@ def main(argv=None, client: SDClient | None = None) -> int:
             return 0
         if a.cmd == "note":
             payload = build_note(a.request, a.text, a.visible_to_requester)
+            target = f"requests/{urllib.parse.quote(str(a.request), safe='')}/notes"
             if not a.send:
                 print("Сухой прогон, ничего не отправлено. Заметка к заявке " + str(a.request) + ", тело запроса:\n"
-                      + json.dumps(payload, ensure_ascii=False, indent=1))
+                      + json.dumps(payload, ensure_ascii=False, indent=1) + "\nsha256 цели и тела: " + payload_digest(payload, target))
                 return 0
-            if not confirm_send(payload, what=f"заметку к заявке {a.request}"):
+            dec = authorize_send(payload, a.approve_file, f"заметку к заявке {a.request}", target)
+            if not dec:
                 print("Отправка отменена.")
                 return 1
-            (client or make_client()).post(f"requests/{urllib.parse.quote(str(a.request), safe='')}/notes", payload)
+            mark = claim_approval(dec["id"]) if isinstance(dec, dict) else None
+            try:
+                (client or make_client()).post(target, payload)
+            except BaseException:
+                if mark:
+                    release_claim(mark)
+                raise
             print(f"заметка добавлена к заявке {a.request}")
             return 0
         if a.cmd == "create":
             payload = build_create(load_config(a.config), a.template, a.subject, a.description, a.group,
-                                   a.technician, a.priority)
+                                   a.technician, a.priority, a.requester_id)
             if a.check:
                 problems = check_create(client or make_client(), payload)
                 for pr in problems:
@@ -453,14 +613,36 @@ def main(argv=None, client: SDClient | None = None) -> int:
                 if problems and a.send:
                     return 1
             if not a.send:
-                print("Сухой прогон, ничего не отправлено. Тело запроса:\n" + json.dumps(payload, ensure_ascii=False, indent=1))
+                print("Сухой прогон, ничего не отправлено. Тело запроса:\n" + json.dumps(payload, ensure_ascii=False, indent=1)
+                      + "\nsha256 цели и тела: " + payload_digest(payload))
                 return 0
-            if not confirm_send(payload):
+            c = client or make_client()
+            dec = authorize_send(payload, a.approve_file)
+            if not dec:
                 print("Отправка отменена.")
                 return 1
-            res = (client or make_client()).post("requests", payload)
+            with _SendLock(payload):                       # после подтверждения: замок держится секунды, а не пока человек думает
+                if not a.allow_duplicate:
+                    dup = find_duplicate(c, payload)
+                    if dup:
+                        print(f'не отправлено: за последний час уже есть заявка с той же темой и заявителем (id={dup.get("id")}). '
+                              "Проверьте её, при необходимости --allow-duplicate.", file=sys.stderr)
+                        return 1
+                mark = claim_approval(dec["id"]) if isinstance(dec, dict) else None
+                try:
+                    res = c.post("requests", payload)
+                except BaseException:
+                    if mark:
+                        release_claim(mark)
+                    raise
             r = res.get("request") or {}
             print(f'создана заявка id={r.get("id")} display_id={r.get("display_id")}')
+            if r.get("id"):
+                try:
+                    diffs = readback(c, r["id"], payload)
+                    print("чтение обратно: " + ("совпало с запросом" if not diffs else "расхождения: " + "; ".join(diffs)))
+                except SDError as e:
+                    print(f"чтение обратно не удалось: {e}")
             return 0
         extra = load_extra_criteria(a.criteria_json)
         rows = fetch_requests(client or make_client(), a.limit, a.page_size, technician=a.technician, group=a.group,

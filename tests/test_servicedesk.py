@@ -2,6 +2,8 @@
 import json
 import os
 import sys
+import time
+import uuid
 import urllib.parse
 from pathlib import Path
 
@@ -103,18 +105,148 @@ def test_create_dry_run_by_default_and_template_alias(tmp_path, capsys):
                  client=sd.SDClient("https://sd.example", "K", transport=t))
     out = capsys.readouterr().out
     assert rc == 0 and "Сухой прогон" in out and not t.calls
-    body = json.loads(out.split("Тело запроса:\n", 1)[1])["request"]
+    body = json.loads(out.split("Тело запроса:\n", 1)[1].split("\nsha256", 1)[0])["request"]
     assert body["template"] == {"name": "Точное имя шаблона"} and body["group"] == {"name": "Группа поддержки"}
 
 
+NOREQ = json.dumps({"requests": [], "list_info": {"has_more_rows": False}})
+CREATED = json.dumps({"request": {"id": "9", "display_id": "9"}, "response_status": {"status": "success"}})
+
+
+def read_back(**over):
+    r = {"id": "9", "subject": "С", "template": {"name": "Т"}}
+    r.update(over)
+    return json.dumps({"request": r})
+
+
 def test_send_requires_human_confirmation(monkeypatch, capsys):
-    t = Fake((200, json.dumps({"request": {"id": "9", "display_id": "9"}, "response_status": {"status": "success"}})))
+    t = Fake((200, NOREQ), (200, CREATED), (200, read_back()))
     client = sd.SDClient("https://sd.example", "K", transport=t)
     monkeypatch.setattr(sd, "confirm_send", lambda payload, **k: False)
-    assert sd.main(["create", "--template", "Т", "--subject", "С", "--send"], client=client) == 1 and not t.calls
+    assert sd.main(["create", "--template", "Т", "--subject", "С", "--send"], client=client) == 1
+    assert not t.calls
     monkeypatch.setattr(sd, "confirm_send", lambda payload, **k: True)
-    assert sd.main(["create", "--template", "Т", "--subject", "С", "--send"], client=client) == 0 and len(t.calls) == 1
-    assert t.calls[0][0] == "POST"
+    assert sd.main(["create", "--template", "Т", "--subject", "С", "--send"], client=client) == 0
+    assert [c[0] for c in t.calls].count("POST") == 1
+    assert "чтение обратно: совпало" in capsys.readouterr().out
+
+
+def make_decision(tmp_path, payload, target="requests", name="decision.json", **over):
+    d = {"approved_by": "Руководитель", "approved_at": time.time(), "payload_sha256": sd.payload_digest(payload, target),
+         "approval_id": uuid.uuid4().hex}
+    d.update(over)
+    f = tmp_path / name
+    f.write_text(json.dumps(d), encoding="utf-8")
+    return f
+
+
+def test_approval_file_bound_to_body_ttl_one_time_and_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "ledger"))
+    payload = sd.build_create({}, "Т", "С")
+    f = make_decision(tmp_path, payload)
+    monkeypatch.delenv("SD_AGENT_SEND", raising=False)
+    with pytest.raises(sd.SDError, match="выключена"):
+        sd.check_approval(str(f), payload)
+    monkeypatch.setenv("SD_AGENT_SEND", "1")
+    dec = sd.check_approval(str(f), payload)
+    assert dec["by"] == "Руководитель"
+    with pytest.raises(sd.SDError, match="другой цели или телу"):
+        sd.check_approval(str(f), sd.build_create({}, "Т", "Другая тема"))
+    with pytest.raises(sd.SDError, match="просрочен"):
+        sd.check_approval(str(make_decision(tmp_path, payload, name="old.json", approved_at=time.time() - sd.APPROVAL_TTL - 5)), payload)
+    with pytest.raises(sd.SDError, match="approved_by"):
+        sd.check_approval(str(make_decision(tmp_path, payload, name="e.json", approved_by="")), payload)
+    # NaN и Infinity не обходят срок
+    for const in ("NaN", "Infinity"):
+        bad = tmp_path / f"{const}.json"
+        bad.write_text(json.dumps({"approved_by": "Я", "payload_sha256": sd.payload_digest(payload), "approval_id": uuid.uuid4().hex,
+                                   "approved_at": 0}).replace('"approved_at": 0', f'"approved_at": {const}'), encoding="utf-8")
+        with pytest.raises(sd.SDError):
+            sd.check_approval(str(bad), payload)
+    # погашение атомарно и одноразово
+    mark = sd.claim_approval(dec["id"])
+    with pytest.raises(sd.SDError, match="одноразовое"):
+        sd.claim_approval(dec["id"])
+    sd.release_claim(mark)
+    sd.claim_approval(dec["id"])
+
+
+def test_claim_fails_closed_when_ledger_unwritable(tmp_path, monkeypatch):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(blocker / "sub"))
+    with pytest.raises(sd.SDError, match="журнал"):
+        sd.claim_approval(uuid.uuid4().hex)
+
+
+def test_decision_for_note_is_bound_to_request_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "ledger"))
+    monkeypatch.setenv("SD_AGENT_SEND", "1")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    note = sd.build_note("5", "текст")
+    f = make_decision(tmp_path, note, target="requests/5/notes")
+    t = Fake((200, "{}"))
+    c = sd.SDClient("https://sd.example", "K", transport=t)
+    # то же тело и то же решение для другой заявки отклоняется
+    assert sd.main(["note", "--request", "6", "--text", "текст", "--send", "--approve-file", str(f)], client=c) == 2 and not t.calls
+    assert sd.main(["note", "--request", "5", "--text", "текст", "--send", "--approve-file", str(f)], client=c) == 0
+    assert t.calls[0][1].endswith("/requests/5/notes")
+
+
+def test_failed_post_releases_decision_for_retry(tmp_path, monkeypatch):
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "ledger"))
+    monkeypatch.setenv("SD_AGENT_SEND", "1")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    payload = sd.build_create({}, "Т", "С", requester_id="1")
+    f = make_decision(tmp_path, payload)
+    t = Fake((200, NOREQ), (500, "{}"), (200, NOREQ), (200, CREATED), (200, read_back(requester={"id": "1"})))
+    c = sd.SDClient("https://sd.example", "K", transport=t)
+    args = ["create", "--template", "Т", "--subject", "С", "--requester-id", "1", "--send", "--approve-file", str(f)]
+    assert sd.main(args, client=c) == 2
+    assert sd.main(args, client=c) == 0
+
+
+def test_parallel_send_lock_blocks_second_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "ledger"))
+    payload = sd.build_create({}, "Т", "С", requester_id="1")
+    with sd._SendLock(payload):
+        with pytest.raises(sd.SDError, match="прямо сейчас"):
+            with sd._SendLock(payload):
+                pass
+    with sd._SendLock(payload):
+        pass
+
+
+def test_send_without_terminal_via_approval_file_dup_check_readback(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "ledger"))
+    monkeypatch.setenv("SD_AGENT_SEND", "1")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    payload = sd.build_create({}, "Т", "С", requester_id="13863")
+    assert payload["request"]["requester"] == {"id": "13863"}
+    f = make_decision(tmp_path, payload)
+    t = Fake((200, NOREQ), (200, CREATED), (200, read_back(requester={"id": "13863"}, template={"name": "Другой"})))
+    client = sd.SDClient("https://sd.example", "K", transport=t)
+    args = ["create", "--template", "Т", "--subject", "С", "--requester-id", "13863", "--send", "--approve-file", str(f)]
+    rc = sd.main(args, client=client)
+    out = capsys.readouterr().out
+    assert rc == 0 and "решение принято от: Руководитель" in out and "расхождения: template.name" in out
+    # то же решение второй раз не работает
+    t2 = Fake((200, NOREQ))
+    assert sd.main(args, client=sd.SDClient("https://sd.example", "K", transport=t2)) == 2
+
+
+def test_duplicate_within_hour_blocks_send(monkeypatch, capsys):
+    dup = json.dumps({"requests": [{"id": "5", "subject": "С", "requester": {"id": "13863"}}], "list_info": {}})
+    t = Fake((200, dup))
+    monkeypatch.setattr(sd, "confirm_send", lambda payload, **k: True)
+    rc = sd.main(["create", "--template", "Т", "--subject", "С", "--requester-id", "13863", "--send"],
+                 client=sd.SDClient("https://sd.example", "K", transport=t))
+    assert rc == 1 and all(c[0] == "GET" for c in t.calls) and "id=5" in capsys.readouterr().err
+    # другой заявитель, дубля нет
+    t = Fake((200, dup), (200, CREATED), (200, read_back()))
+    rc = sd.main(["create", "--template", "Т", "--subject", "С", "--requester-id", "999", "--send"],
+                 client=sd.SDClient("https://sd.example", "K", transport=t))
+    assert rc == 0
 
 
 def test_confirm_refuses_without_tty_and_needs_exact_word():
@@ -274,3 +406,22 @@ def test_meta_403_reports_unavailable(capsys):
     assert sd.main(["meta", "--what", "all", "--json"], client=sd.SDClient("https://sd.example", "KEY", transport=t)) == 0
     d = json.loads(capsys.readouterr().out)
     assert set(d) == {"templates", "observed"} and all(str(v).startswith("недоступно") for v in d.values())
+
+
+def test_approve_command_writes_valid_decision(tmp_path, monkeypatch):
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "l"))
+    monkeypatch.setenv("SD_AGENT_SEND", "1")
+    payload = sd.build_create({}, "Т", "С")
+    out = tmp_path / "d.json"
+    assert sd.main(["approve", "--digest", sd.payload_digest(payload), "--by", "Имя", "--out", str(out)]) == 0
+    assert sd.check_approval(str(out), payload)["by"] == "Имя"
+
+
+def test_lock_exit_does_not_remove_foreign_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "ledger"))
+    payload = sd.build_create({}, "Т", "С", requester_id="1")
+    first = sd._SendLock(payload)
+    first.__enter__()
+    first.path.write_text("чужой токен", encoding="utf-8")      # как будто замок перехватил другой запуск
+    first.__exit__()
+    assert first.path.exists()
