@@ -45,6 +45,7 @@ import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+from html.parser import HTMLParser
 from pathlib import Path
 
 ACCEPT = "application/vnd.manageengine.sdp.v3+json"
@@ -324,24 +325,83 @@ def load_config(path: str | None = None) -> dict:
     return tomllib.loads(p.read_text(encoding="utf-8"))
 
 
+_ALLOWED_TAGS = {"p", "br", "ul", "ol", "li", "b", "i", "strong", "em", "div"}
+
+
+class _Sanitizer(HTMLParser):
+    """Готовый HTML пропускаем только через белый список: теги из _ALLOWED_TAGS без атрибутов и ссылки <a href> с
+    протоколами http, https, mailto. Остальное (script, img, обработчики on*, style, javascript:) экранируется как текст."""
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.out = []
+
+    @staticmethod
+    def _esc(t: str) -> str:
+        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _ALLOWED_TAGS:
+            self.out.append(f"<{tag}>")
+        elif tag == "a":
+            href = dict(attrs).get("href") or ""
+            if re.match(r"(?i)(https?://|mailto:)", href.strip()):
+                self.out.append('<a href="' + href.strip().replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;") + '">')
+            else:
+                self.out.append("<a>")
+        else:
+            self.out.append(self._esc(self.get_starttag_text() or ""))
+
+    def handle_startendtag(self, tag, attrs):
+        if tag == "br":
+            self.out.append("<br>")
+        else:
+            self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag in _ALLOWED_TAGS or tag == "a":
+            self.out.append(f"</{tag}>")
+        else:
+            self.out.append(self._esc(f"</{tag}>"))
+
+    def handle_data(self, data):
+        self.out.append(self._esc(data))
+
+    def handle_entityref(self, name):
+        self.out.append(f"&{name};" if re.fullmatch(r"[A-Za-z0-9]+", name) else self._esc(f"&{name};"))
+
+    def handle_charref(self, name):
+        self.out.append(f"&#{name};" if re.fullmatch(r"[0-9xA-Fa-f]+", name) else self._esc(f"&#{name};"))
+
+    def handle_comment(self, data):
+        pass
+
+
 def to_html(text: str) -> str:
     """Описание и заметки SDP хранит как HTML: переводы строк пропадают, абзацы и пункты сливаются в одну строку
-    (инцидент 23.10.2026, заявка 920325). Простой текст экранируем, абзацы и строки отделяем тегами; готовый HTML не трогаем."""
-    if not text or re.search(r"<(br|p|div|ul|ol|li|b|i|a|table)\b", text, re.I):
+    (инцидент 23.10.2026, заявка 920325). Простой текст экранируем, абзацы и строки отделяем тегами. Готовый HTML
+    пропускаем через белый список (_Sanitizer), чтобы текст из недоверенного источника не внёс скрипт или обработчик."""
+    if not text:
         return text
+    if re.search(r"<(br|p|div|ul|ol|li|b|i|a|table)\b", text, re.I):
+        sn = _Sanitizer()
+        sn.feed(text)
+        sn.close()
+        return "".join(sn.out)
     paras = [p for p in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()) if p.strip()]
     esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return "".join("<p>" + "<br>".join(esc(l.rstrip()) for l in p.split("\n")) + "</p>" for p in paras)
 
 
 def build_update(description: str | None = None, due: str | None = None, start: str | None = None, end: str | None = None) -> dict:
-    """Тело правки заявки: описание и сроки (даты ГГГГ-ММ-ДД в часовом поясе Минска, время 09:00 и 18:00)."""
+    """Тело правки заявки: описание и сроки (даты ГГГГ-ММ-ДД, время по Минску: начало 09:00, срок и окончание 18:00)."""
     req = {}
     if description:
         req["description"] = to_html(description)
-    for key, day, end_of_day in (("due_by_time", due, True), ("scheduled_start_time", start, False), ("scheduled_end_time", end, True)):
+    minsk = dt.timezone(dt.timedelta(hours=3))
+    for key, day, hour in (("due_by_time", due, 18), ("scheduled_start_time", start, 9), ("scheduled_end_time", end, 18)):
         if day:
-            req[key] = {"value": epoch_ms(day, end_of_day)}
+            t = dt.datetime.strptime(day, "%Y-%m-%d").replace(hour=hour, tzinfo=minsk)
+            req[key] = {"value": str(int(t.timestamp() * 1000))}
     return {"request": req}
 
 
@@ -636,9 +696,10 @@ def main(argv=None, client: SDClient | None = None) -> int:
             if not dec:
                 print("Отправка отменена.")
                 return 1
+            c = client or make_client()                     # ошибка окружения до того, как решение погашено
             mark = claim_approval(dec["id"]) if isinstance(dec, dict) else None
             try:
-                (client or make_client()).post(target, payload)
+                c.post(target, payload)
             except BaseException as e:
                 if mark and _definitely_rejected(e):
                     release_claim(mark)
@@ -659,9 +720,10 @@ def main(argv=None, client: SDClient | None = None) -> int:
             if not dec:
                 print("Отправка отменена.")
                 return 1
+            c = client or make_client()                     # ошибка окружения до того, как решение погашено
             mark = claim_approval(dec["id"]) if isinstance(dec, dict) else None
             try:
-                (client or make_client()).put(target, payload)
+                c.put(target, payload)
             except BaseException as e:
                 if mark and _definitely_rejected(e):
                     release_claim(mark)

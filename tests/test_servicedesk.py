@@ -444,4 +444,47 @@ def test_description_newlines_become_html_so_points_do_not_merge():
 def test_build_update_has_description_and_deadlines():
     r = sd.build_update("x\ny", due="2026-11-30", start="2026-11-16")["request"]
     assert r["description"] == "<p>x<br>y</p>" and set(r) == {"description", "due_by_time", "scheduled_start_time"}
-    assert r["due_by_time"]["value"].isdigit()
+    assert r["due_by_time"]["value"] == "1796050800000"  # 30.11.2026 18:00 по Минску = 15:00 UTC
+
+
+@pytest.mark.parametrize("evil", [
+    "<p>нормально</p><script>alert(1)</script>",
+    '<p>x</p><img src=x onerror=alert(1)>',
+    '<p onclick="x()">текст</p>',
+    '<a href="javascript:alert(1)">ссылка</a>',
+    '<p>x</p><iframe src="http://e"></iframe>',
+])
+def test_to_html_allowlist_blocks_active_content(evil):
+    h = sd.to_html(evil).lower()
+    assert "<script" not in h and "<img" not in h and "<iframe" not in h
+    assert "onerror=" not in h.replace("&lt;", "<") or "&lt;img" in h
+    assert "onclick" not in h.split("<p>")[0] and "<p onclick" not in h
+    assert 'href="javascript' not in h
+
+
+def test_to_html_keeps_safe_tags_and_https_links():
+    h = sd.to_html('<p>Смотри <a href="https://confluence.example/x?a=1&b=2">страницу</a></p><ul><li>раз</li></ul>')
+    assert '<a href="https://confluence.example/x?a=1&amp;b=2">страницу</a>' in h and "<ul><li>раз</li></ul>" in h
+
+
+def test_update_dry_run_send_and_path(tmp_path, monkeypatch, capsys):
+    t = Fake()
+    c = sd.SDClient("https://sd.example", "K", transport=t)
+    assert sd.main(["update", "--request", "77", "--description", "а\nб"], client=c) == 0 and not t.calls
+    assert "Сухой прогон" in capsys.readouterr().out
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(tmp_path / "l"))
+    monkeypatch.setenv("SD_AGENT_SEND", "1")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    payload = sd.build_update("а\nб")
+    f = make_decision(tmp_path, payload, target="requests/77")
+    t = Fake((200, "{}"))
+    c = sd.SDClient("https://sd.example", "K", transport=t)
+    # решение для другой заявки не подходит, без подтверждения ничего не уходит
+    assert sd.main(["update", "--request", "78", "--description", "а\nб", "--send", "--approve-file", str(f)], client=c) == 2 and not t.calls
+    assert sd.main(["update", "--request", "77", "--description", "а\nб", "--send"], client=c) == 1 and not t.calls
+    assert sd.main(["update", "--request", "77", "--description", "а\nб", "--send", "--approve-file", str(f)], client=c) == 0
+    m, url, _, _ = t.calls[0]
+    assert m == "PUT" and url.endswith("/api/v3/requests/77")
+    # повторное использование решения отклоняется
+    assert sd.main(["update", "--request", "77", "--description", "а\nб", "--send", "--approve-file", str(f)],
+                   client=sd.SDClient("https://sd.example", "K", transport=Fake((200, "{}")))) == 2
