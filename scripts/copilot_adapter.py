@@ -10,9 +10,14 @@
 Разовая авторизация (нужен браузер, делает человек):
     ! python scripts/copilot_adapter.py --login
 
+Окно браузера: в обычной работе скрыто (headless) у всех. Окно открывается само только когда нужен человек: до первого
+входа (нет сохранённой сессии) и при ошибке аутентификации (сессия истекла, страница входа Microsoft). Человек входит,
+сессия сохраняется, вопрос повторяется скрыто. Принудительно показывать окно всегда: --visible или AI_TOOLKIT_COPILOT_VISIBLE=1.
+Не открывать окно входа никогда (сервер, CI): AI_TOOLKIT_COPILOT_NO_LOGIN_WINDOW=1 (на Linux без DISPLAY окно не открывается).
+
 Спросить (по умолчанию — новый чат, модель "gpt-latest" — НЕ Auto):
     python scripts/copilot_adapter.py "текст вопроса" [--model gpt-latest|auto|quick|think-deeper]
-                                      [--out файл.md] [--continue] [--headless]
+                                      [--out файл.md] [--continue] [--visible]
                                       [--wait-timeout 180]
 
 Меню селектора модели Copilot Basic — ДВА уровня (снято вживую 04.08.2026):
@@ -37,6 +42,9 @@ UI — сломается здесь первым; чинить по образ�
 Запрос уходит в корпоративный M365 Copilot вашей организации; решение, какие данные туда можно, за вами.
 """
 import argparse
+import contextlib
+import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -256,12 +264,56 @@ def _prepare_files(files) -> tuple:
     return tmp, out
 
 
+class AuthError(RuntimeError):
+    """Нужен вход человека: страница входа Microsoft вместо чата (сессия истекла или не выполнена)."""
+
+
+_LOGIN_URL = re.compile(r"login\.(microsoftonline|live)\.com|/oauth2/|/signin|/login", re.I)
+
+
+def _headless_default() -> bool:
+    return os.environ.get("AI_TOOLKIT_COPILOT_VISIBLE") != "1"
+
+
+def _can_show_window() -> bool:
+    if os.environ.get("AI_TOOLKIT_COPILOT_NO_LOGIN_WINDOW") == "1":
+        return False
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    return True
+
+
+def _login_visible(reason: str) -> bool:
+    """Окно входа для человека. Сообщения идут в stderr, чтобы не попасть в ответ на stdout."""
+    print(f"⚠ {reason} Открываю окно для входа.", file=sys.stderr)
+    with contextlib.redirect_stdout(sys.stderr):
+        return do_login() == 0
+
+
 def ask(prompt: str, model: str = DEFAULT_MODEL, new_chat: bool = True,
-        headless: bool = False, wait_timeout: int = 180, files=None) -> str:
+        headless: bool | None = None, wait_timeout: int = 180, files=None) -> str:
+    """Скрытый режим по умолчанию. Окно показывается до первого входа и при ошибке аутентификации, после входа
+    вопрос повторяется скрыто (один раз). headless=False показывает окно всегда."""
     if model not in ALL_MODELS:
         raise ValueError(f"неизвестная модель {model!r}, доступно: {ALL_MODELS}")
+    if headless is None:
+        headless = _headless_default()
+    if not _can_show_window():
+        headless = True                     # сервер, CI, Linux без DISPLAY: окно показать нельзя ни при каких настройках
     if not PROFILE_DIR.exists():
-        raise RuntimeError("Нет сессии. Сначала: ! python scripts/copilot_adapter.py --login")
+        if not _can_show_window() or not _login_visible("Нет сохранённой сессии M365 Copilot."):
+            raise RuntimeError("Нет сессии. Сначала: ! python scripts/copilot_adapter.py --login")
+    try:
+        return _ask_once(prompt, model, new_chat, headless, wait_timeout, files)
+    except AuthError as e:
+        if not _can_show_window():
+            raise RuntimeError(f"{e}. Повтори: ! python scripts/copilot_adapter.py --login") from None
+        if not _login_visible("Сессия M365 Copilot недействительна (ошибка входа)."):
+            raise RuntimeError("Вход не выполнен за 5 минут. Повтори: ! python scripts/copilot_adapter.py --login") from None
+        return _ask_once(prompt, model, new_chat, headless, wait_timeout, files)
+
+
+def _ask_once(prompt: str, model: str, new_chat: bool, headless: bool, wait_timeout: int, files=None) -> str:
     from playwright.sync_api import sync_playwright
     with _ProfileLock(), sync_playwright() as p:
         ctx = _new_context(p, headless)
@@ -278,6 +330,15 @@ def ask(prompt: str, model: str = DEFAULT_MODEL, new_chat: bool = True,
                     ready = page.get_by_role("textbox", name="Message Copilot").count() > 0
                 except Exception as e:           # страница как раз перезагружается
                     err = str(e)[:120]
+                if not ready and _LOGIN_URL.search(page.url or ""):
+                    try:                       # форма входа ждёт логин или пароль: без человека не пройти, не ждём три минуты
+                        needs_human = page.locator("input[name=loginfmt], input[type=password]").count() > 0
+                    except Exception:
+                        needs_human = False
+                    if needs_human:
+                        raise AuthError(f"страница входа Microsoft ждёт логин или пароль; url={page.url[:70]}")
+                if not ready and tries >= 2 and time.time() - since > 30 and _LOGIN_URL.search(page.url or ""):
+                    raise AuthError(f"страница входа Microsoft не пропускает без человека (выбор учётки, MFA, пароль); url={page.url[:70]}")
                 if not ready:
                     if "login.microsoftonline" in page.url and time.time() - since > 30 and tries < 4:
                         tries += 1; since = time.time()
@@ -297,9 +358,13 @@ def ask(prompt: str, model: str = DEFAULT_MODEL, new_chat: bool = True,
                         fh.write(data)
                 except Exception:
                     pass
+                if _LOGIN_URL.search(page.url or ""):
+                    raise AuthError(f"страница входа Microsoft вместо чата; url={page.url[:70]}; снимок {shot}")
                 raise RuntimeError(f"{err or 'нет поля ввода'}; url={page.url[:70]}; снимок {shot}")
         except Exception as e:
             ctx.close()
+            if isinstance(e, AuthError):
+                raise
             raise RuntimeError(
                 f"Не дождался чата M365 Copilot ({str(e)[:120]}; сессия протухла?). "
                 "Повтори: ! python scripts/copilot_adapter.py --login")
@@ -373,7 +438,8 @@ def main():
     ap.add_argument("--model", choices=ALL_MODELS, default=DEFAULT_MODEL)
     ap.add_argument("--continue", dest="continue_chat", action="store_true",
                      help="не начинать новый чат, продолжить последний открытый")
-    ap.add_argument("--headless", action="store_true")
+    ap.add_argument("--headless", action="store_true", help="скрытый режим (теперь по умолчанию, оставлено для совместимости)")
+    ap.add_argument("--visible", action="store_true", help="всегда показывать окно браузера")
     ap.add_argument("--wait-timeout", type=int, default=180)
     ap.add_argument("--out", help="сохранить ответ в файл (кроме stdout)")
     ap.add_argument("--file", action="append", default=[], metavar="ПУТЬ",
@@ -389,7 +455,7 @@ def main():
 
     try:
         answer = ask(a.prompt, model=a.model, new_chat=not a.continue_chat,
-                     headless=a.headless, wait_timeout=a.wait_timeout, files=a.file)
+                     headless=False if a.visible else None, wait_timeout=a.wait_timeout, files=a.file)
     except RuntimeError as e:
         print(f"⚠ {e}", file=sys.stderr)
         return 2

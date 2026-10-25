@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import tempfile
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -254,3 +256,89 @@ def test_git_diff_is_decoded_as_utf8(tmp_path):
     f.write_text("Процедура Тест2()\nКонецПроцедуры\n", encoding="utf-8")
     d = so.collect_diff(tmp_path, "HEAD", None)
     assert "Процедура Тест2" in d and "м.bsl" in d
+
+
+def test_adapter_hidden_by_default_and_visible_flag(monkeypatch):
+    import copilot_adapter as ca
+    monkeypatch.delenv("AI_TOOLKIT_COPILOT_VISIBLE", raising=False)
+    assert ca._headless_default() is True
+    monkeypatch.setenv("AI_TOOLKIT_COPILOT_VISIBLE", "1")
+    assert ca._headless_default() is False
+
+
+def test_adapter_shows_window_only_when_login_needed(monkeypatch, tmp_path):
+    import copilot_adapter as ca
+    calls = []
+    monkeypatch.delenv("AI_TOOLKIT_COPILOT_NO_LOGIN_WINDOW", raising=False)
+    monkeypatch.setattr(ca, "_can_show_window", lambda: True)
+    # 1) обычная работа: сессия есть, окно не открывается, режим скрытый
+    prof = tmp_path / "profile"
+    prof.mkdir()
+    monkeypatch.setattr(ca, "PROFILE_DIR", prof)
+    monkeypatch.setattr(ca, "_login_visible", lambda reason: calls.append(("login", reason)) or True)
+    monkeypatch.setattr(ca, "_ask_once", lambda *a: calls.append(("ask", a[3])) or "ответ")
+    assert ca.ask("в", headless=None) == "ответ"
+    assert calls == [("ask", True)]
+    # 2) ошибка аутентификации: окно входа, потом повтор скрыто
+    calls.clear()
+    state = {"n": 0}
+
+    def flaky(*a):
+        state["n"] += 1
+        calls.append(("ask", a[3]))
+        if state["n"] == 1:
+            raise ca.AuthError("страница входа")
+        return "после входа"
+    monkeypatch.setattr(ca, "_ask_once", flaky)
+    assert ca.ask("в") == "после входа"
+    assert [c[0] for c in calls] == ["ask", "login", "ask"] and calls[2] == ("ask", True)
+    # 3) первого входа не было: окно до вопроса
+    calls.clear()
+    monkeypatch.setattr(ca, "PROFILE_DIR", tmp_path / "нет")
+    monkeypatch.setattr(ca, "_ask_once", lambda *a: calls.append(("ask", a[3])) or "ок")
+    assert ca.ask("в") == "ок" and calls[0][0] == "login"
+
+
+def test_adapter_no_window_in_headless_environments(monkeypatch, tmp_path):
+    import copilot_adapter as ca
+    monkeypatch.setattr(ca, "PROFILE_DIR", tmp_path / "нет")
+    monkeypatch.setattr(ca, "_can_show_window", lambda: False)
+    monkeypatch.setattr(ca, "_login_visible", lambda r: (_ for _ in ()).throw(AssertionError("окно не должно открываться")))
+    with pytest.raises(RuntimeError, match="Нет сессии"):
+        ca.ask("в")
+    prof = tmp_path / "p"
+    prof.mkdir()
+    monkeypatch.setattr(ca, "PROFILE_DIR", prof)
+    monkeypatch.setattr(ca, "_ask_once", lambda *a: (_ for _ in ()).throw(ca.AuthError("вход")))
+    with pytest.raises(RuntimeError, match="--login"):
+        ca.ask("в")
+    monkeypatch.setenv("AI_TOOLKIT_COPILOT_NO_LOGIN_WINDOW", "1")
+    monkeypatch.undo()
+    monkeypatch.setenv("AI_TOOLKIT_COPILOT_NO_LOGIN_WINDOW", "1")
+    assert ca._can_show_window() is False
+
+
+def test_adapter_login_url_detection():
+    import copilot_adapter as ca
+    assert ca._LOGIN_URL.search("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?x=1")
+    assert not ca._LOGIN_URL.search("https://m365.cloud.microsoft/chat")
+
+
+def test_adapter_forced_headless_without_window_and_second_auth_error_is_final(monkeypatch, tmp_path):
+    import copilot_adapter as ca
+    seen = []
+    prof = tmp_path / "p"
+    prof.mkdir()
+    monkeypatch.setattr(ca, "PROFILE_DIR", prof)
+    monkeypatch.setattr(ca, "_can_show_window", lambda: False)
+    monkeypatch.setenv("AI_TOOLKIT_COPILOT_VISIBLE", "1")
+    monkeypatch.setattr(ca, "_ask_once", lambda *a: seen.append(a[3]) or "ок")
+    assert ca.ask("в") == "ок" and seen == [True]          # VISIBLE=1 не открывает окно там, где его показать нельзя
+    # после входа второй AuthError подряд уходит наружу, новое окно не открывается
+    monkeypatch.setattr(ca, "_can_show_window", lambda: True)
+    logins = []
+    monkeypatch.setattr(ca, "_login_visible", lambda r: logins.append(r) or True)
+    monkeypatch.setattr(ca, "_ask_once", lambda *a: (_ for _ in ()).throw(ca.AuthError("вход")))
+    with pytest.raises(ca.AuthError):
+        ca.ask("в")
+    assert len(logins) == 1
