@@ -488,3 +488,12 @@ def test_update_dry_run_send_and_path(tmp_path, monkeypatch, capsys):
     # повторное использование решения отклоняется
     assert sd.main(["update", "--request", "77", "--description", "а\nб", "--send", "--approve-file", str(f)],
                    client=sd.SDClient("https://sd.example", "K", transport=Fake((200, "{}")))) == 2
+
+
+def test_lock_fails_closed_when_ledger_dir_is_a_file(tmp_path, monkeypatch):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    monkeypatch.setenv("SD_APPROVAL_LEDGER", str(blocker / "sub"))
+    with pytest.raises(sd.SDError, match="недоступен"):
+        with sd._SendLock(sd.build_create({}, "Т", "С", requester_id="1")):
+            pass

@@ -484,15 +484,19 @@ def check_approval(path: str, payload: dict, target: str = "requests", now: floa
 def claim_approval(approval_id: str) -> Path:
     """Атомарно погасить решение до отправки: создание метки эксклюзивное, второй процесс получит отказ."""
     d = ledger_dir()
+    unavailable = SDError("журнал решений недоступен для записи: без него одноразовость не гарантируется, отправка отменена")
     try:
         d.mkdir(parents=True, exist_ok=True)
-        mark = d / f"approved-{approval_id}"
+    except OSError:                                  # в том числе FileExistsError, когда на месте каталога файл (Windows)
+        raise unavailable from None
+    mark = d / f"approved-{approval_id}"
+    try:
         with open(mark, "x", encoding="utf-8") as f:
             f.write(str(int(time.time())))
     except FileExistsError:
         raise SDError("это решение уже использовано (одноразовое)") from None
     except OSError:
-        raise SDError("журнал решений недоступен для записи: без него одноразовость не гарантируется, отправка отменена") from None
+        raise unavailable from None
     return mark
 
 
@@ -521,6 +525,9 @@ class _SendLock:
     def __enter__(self):
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            raise SDError("каталог блокировок недоступен для записи, отправка отменена") from None
+        try:
             if self.path.exists() and time.time() - self.path.stat().st_mtime > 3600:
                 self.path.unlink()
             with open(self.path, "x", encoding="utf-8") as f:
