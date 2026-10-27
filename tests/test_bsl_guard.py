@@ -218,7 +218,7 @@ def test_ignore_with_reason_on_same_line():
 
 def test_ignore_on_previous_line():
     text = _STEP_MODULE.format(
-        call="// bsl-guard: ignore db-call-in-loop — шаги последовательны\n"
+        call="// bsl-guard: ignore db-call-in-loop - шаги последовательны\n"
              "        Р = ВыполнитьШаг(Шаг);")
     assert _codes(text) == []
 
